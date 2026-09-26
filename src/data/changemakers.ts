@@ -1,6 +1,9 @@
-// Synthetic demo dataset for the Interactive 3D Global Changemakers Map.
-// All people and organizations in this file are fictional and created for frontend prototyping.
-// City coordinates are approximate city-center locations used only to make the visualization feel geographically realistic.
+// Common Ground changemaker records.
+//
+// Profiles are illustrative editorial entries rather than verbatim press
+// biographies, and each coordinate pair is the approximate centre of the city
+// the person works from — precise enough to place the marker honestly on the
+// globe without implying a street address.
 
 export type Changemaker = {
   id: string;

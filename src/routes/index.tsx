@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, Fragment, useMemo, useRef, useState } from "react";
+import { useEffect, Fragment, useMemo, useRef, useState, useDeferredValue, useCallback } from "react";
 import { ArrowRight, ArrowUpRight, ChevronDown, CircleHelp, Compass, Globe2, Layers3, List, MapPin, Network, RotateCcw, Search, Share2, SlidersHorizontal, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { categoryTone, changemakers, type Changemaker } from "@/data/changemakers";
@@ -34,6 +34,15 @@ const countryChoices: { value: string; label: string; group?: string }[] = [
 ];
 const sdgByNumber = new Map(sdgs.map((sdg) => [sdg.number, sdg]));
 type ExplorerMode = "explore" | "network" | "sdgs" | "places";
+
+/** 12.3456 -> `12°21′ N`, so the status bar reads like a surveyor's note. */
+function formatCoordinate(value: number, positive: string, negative: string) {
+  const absolute = Math.abs(value);
+  const whole = Math.floor(absolute);
+  const minutes = Math.round((absolute - whole) * 60);
+  const degrees = minutes === 60 ? whole + 1 : whole;
+  return `${degrees}°${String(minutes === 60 ? 0 : minutes).padStart(2, "0")}′ ${value < 0 ? negative : positive}`;
+}
 
 function SelectFilter({ label, value, onChange, choices }: { label: string; value: string; onChange: (value: string) => void; choices: { value: string; label: string }[] }) {
   return <label className="filter-field"><span>{label}</span><div className="select-wrap"><select className={value ? "filter-select filter-select--set" : "filter-select"} value={value} onChange={(event) => onChange(event.target.value)} aria-label={`Filter by ${label}`}><option value="">All {label === "SDG" ? "goals" : label === "Country" ? "countries" : `${label.toLowerCase()}s`}</option>{choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select><ChevronDown size={14} aria-hidden="true" /></div></label>;
@@ -108,6 +117,17 @@ function ExplorerPage() {
     });
   }, [search, filters]);
   const selected = changemakers.find((person) => person.id === selectedId);
+  // The coordinate readout tracks the open profile, and falls back to the middle
+  // of whatever the current filters leave on screen.
+  const focusPoint = useMemo(() => {
+    if (selected) return { latitude: selected.latitude, longitude: selected.longitude, label: `${selected.name} — ${selected.city}` };
+    if (!results.length) return null;
+    return {
+      latitude: results.reduce((sum, person) => sum + person.latitude, 0) / results.length,
+      longitude: results.reduce((sum, person) => sum + person.longitude, 0) / results.length,
+      label: "Centre of the current results",
+    };
+  }, [selected, results]);
   const activeFilterCount = Object.values(filters).filter(Boolean).length;
   const clearFilters = () => { setFilters({ sdg: "", category: "", region: "", country: "" }); setSearch(""); };
   const selectPerson = (id: string) => {
@@ -218,8 +238,9 @@ function ExplorerPage() {
         <div className="sidebar-brand"><div className="brand-mark"><Globe2 size={18} strokeWidth={1.6} /></div><div className="brand-copy"><span className="brand-name">Common Ground</span><span className="brand-caption">Global changemakers map</span></div></div>
         <div className="sidebar-intro"><h1>People making<br /><em>a difference.</em></h1><p>Discover changemakers and the ideas shaping communities across the Global South.</p></div>
         <div className="sidebar-tools"><label className="search-field"><input ref={searchInput} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search changemakers" aria-label="Search changemakers" /><Search size={16} className="search-icon" />{search && <Button variant="ghost" size="icon" className="search-clear" onClick={() => setSearch("")} aria-label="Clear search"><X size={14} /></Button>}</label>
+          <button type="button" className="mobile-filter-toggle" aria-expanded={showFilters} aria-controls="explorer-filters" onClick={() => setShowFilters((visible) => !visible)}>Filters<ChevronDown size={14} className={showFilters ? "rotate-icon" : ""} /></button>
         </div>
-        <div className="filters-panel"><div className="filters-heading"><span>Narrow it down</span>{activeFilterCount > 0 && <button type="button" className="clear-button" onClick={clearFilters}>Clear all</button>}</div><div className={`filter-grid ${showFilters ? "filter-grid--open" : ""}`}><SelectFilter label="Category" value={filters.category} onChange={setFilter("category")} choices={options.category.map((value) => ({ value, label: value }))} /><SelectFilter label="Region" value={filters.region} onChange={setFilter("region")} choices={options.region.map((value) => ({ value, label: value }))} /><SelectFilter label="SDG" value={filters.sdg} onChange={setFilter("sdg")} choices={options.sdg.map((number) => ({ value: String(number), label: `${number} · ${sdgByNumber.get(number)?.name ?? "SDG"}` }))} /><SelectFilter label="Country" value={filters.country} onChange={setFilter("country")} choices={countryChoices} /></div>{activeFilterCount > 0 && <div className="active-tag-row">{Object.entries(filters).filter(([, value]) => value).map(([key, value]) => <button type="button" className="active-tag" key={key} onClick={() => setFilter(key as keyof typeof filters)("")}><span>{key === "sdg" ? `SDG ${value}` : value}</span><X size={12} /></button>)}</div>}</div>
+        <div className="filters-panel" id="explorer-filters"><div className="filters-heading"><span>Narrow it down</span>{activeFilterCount > 0 && <button type="button" className="clear-button" onClick={clearFilters}>Clear all</button>}</div><div className={`filter-grid ${showFilters ? "filter-grid--open" : ""}`}><SelectFilter label="Category" value={filters.category} onChange={setFilter("category")} choices={options.category.map((value) => ({ value, label: value }))} /><SelectFilter label="Region" value={filters.region} onChange={setFilter("region")} choices={options.region.map((value) => ({ value, label: value }))} /><SelectFilter label="SDG" value={filters.sdg} onChange={setFilter("sdg")} choices={options.sdg.map((number) => ({ value: String(number), label: `${number} · ${sdgByNumber.get(number)?.name ?? "SDG"}` }))} /><SelectFilter label="Country" value={filters.country} onChange={setFilter("country")} choices={countryChoices} /></div>{activeFilterCount > 0 && <div className="active-tag-row">{Object.entries(filters).filter(([, value]) => value).map(([key, value]) => <button type="button" className="active-tag" key={key} onClick={() => setFilter(key as keyof typeof filters)("")}><span>{key === "sdg" ? `SDG ${value}` : value}</span><X size={12} /></button>)}</div>}</div>
       </div></aside>
       <section className={`main-stage ${view === "list" ? "main-stage--list" : ""}`} aria-label="Changemakers explorer">
         <div className="top-controls"><div className="mode-control" role="group" aria-label="Explorer mode">{(["explore", "network", "sdgs", "places"] as ExplorerMode[]).map((item) => <button key={item} type="button" className={mode === item ? "mode-pill active" : "mode-pill"} aria-pressed={mode === item} onClick={() => setMode(item)}>{item === "sdgs" ? "SDGs" : item[0]!.toUpperCase() + item.slice(1)}</button>)}</div><div className="toolbar-cluster"><div className="view-toggle" role="group" aria-label="View mode"><button type="button" className={view === "globe" ? "view-pill active" : "view-pill"} onClick={() => setView("globe")} aria-pressed={view === "globe"}>Globe</button><button type="button" className={view === "list" ? "view-pill active" : "view-pill"} onClick={() => setView("list")} aria-pressed={view === "list"}>List</button></div><div className="toolbar-actions"><button type="button" className="icon-button" title="Share view" aria-label="Share view" onClick={shareView}><Share2 size={15} /></button><button type="button" className="icon-button" title="Reset view" aria-label="Reset view" onClick={resetView}><RotateCcw size={15} /></button></div></div></div>
@@ -234,7 +255,7 @@ function ExplorerPage() {
               <span className="status-stats">
                 {selected ? <>{selected.sdgs.length} SDGs · {relatedConnections.length} connection{relatedConnections.length !== 1 ? "s" : ""} · {selected.country}</> : <>{results.length} people · {visibleCountries.length} countries · {new Set(results.flatMap((person) => person.sdgs)).size} SDGs · {relatedConnections.length} connections</>}
               </span>
-              <span className="status-coords">27°43′ N &nbsp; 85°19′ E</span>
+              {focusPoint && <span className="status-coords" title={focusPoint.label}>{formatCoordinate(focusPoint.latitude, "N", "S")}&nbsp;&nbsp;{formatCoordinate(focusPoint.longitude, "E", "W")}</span>}
             </div>
             {rippleMessage && <div className="ripple-status" role="status"><Sparkles size={14} />Following the ripple <span>{rippleMessage}</span></div>}
           </>

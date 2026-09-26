@@ -1,19 +1,45 @@
-import { Canvas, useFrame } from "@react-three/fiber";
-import { Environment, Lightformer, OrbitControls, Stars } from "@react-three/drei";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import {
+  Environment,
+  Lightformer,
+  OrbitControls,
+  Stars,
+} from "@react-three/drei";
 import { ArrowRight } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, {useCallback, useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import * as THREE from "three";
 import { feature } from "topojson-client";
-import { geoEquirectangular, geoPath } from "d3-geo";
-import type { Feature, FeatureCollection, Geometry } from "geojson";
-import type { GeometryCollection, Topology } from "topojson-specification";
+import {
+  geoContains,
+  geoEquirectangular,
+  geoPath,
+} from "d3-geo";
+import type {
+  Feature,
+  FeatureCollection,
+  Geometry,
+} from "geojson";
+import type {
+  GeometryCollection,
+  Topology,
+} from "topojson-specification";
+
 import atlas from "@/data/world-atlas.json";
-import { categoryColor, type Changemaker } from "@/data/changemakers";
+import {
+  categoryColor,
+  type Changemaker,
+} from "@/data/changemakers";
 import type { Connection } from "@/data/connections";
-import { geoContains } from "d3-geo";
 
 const RADIUS = 2.55;
 const DEG = Math.PI / 180;
+
+const TEXTURE_WIDTH = 2048;
+const TEXTURE_HEIGHT = 1024;
 
 type GlobePalette = {
   ocean: string;
@@ -23,202 +49,1678 @@ type GlobePalette = {
   text: string;
 };
 
-type CountryFeature = Feature<Geometry, { name: string }>;
+export type CountryFeature = Feature<
+  Geometry,
+  { name: string }
+>;
 
-const topology = atlas as unknown as Topology<{ countries: GeometryCollection }>;
-const countryFeatures = feature(topology, topology.objects.countries) as FeatureCollection<Geometry, { name: string }>;
+const topology =
+  atlas as unknown as Topology<{
+    countries: GeometryCollection;
+  }>;
 
-function readGlobePalette(): GlobePalette {
-  const styles = getComputedStyle(document.documentElement);
-  return {
-    ocean: styles.getPropertyValue("--surface-strong").trim(),
-    land: styles.getPropertyValue("--surface-muted").trim(),
-    outline: styles.getPropertyValue("--text-tertiary").trim(),
-    blue: styles.getPropertyValue("--accent-blue").trim(),
-    text: styles.getPropertyValue("--text-primary").trim(),
-  };
-}
+const countryFeatures =
+  feature(
+    topology,
+    topology.objects.countries,
+  ) as FeatureCollection<
+    Geometry,
+    { name: string }
+  >;
 
-export function globePoint(latitude: number, longitude: number, radius = RADIUS) {
-  const lat = latitude * DEG;
-  const lon = longitude * DEG;
-  return new THREE.Vector3(
-    radius * Math.cos(lat) * Math.sin(lon),
-    radius * Math.sin(lat),
-    radius * Math.cos(lat) * Math.cos(lon),
+/* -------------------------------------------------------------------------- */
+/* Projection                                                                */
+/* -------------------------------------------------------------------------- */
+
+const projection = geoEquirectangular()
+  .rotate([-90, 0])
+  .scale(TEXTURE_WIDTH / (2 * Math.PI))
+  .translate([
+    TEXTURE_WIDTH / 2,
+    TEXTURE_HEIGHT / 2,
+  ]);
+
+/* -------------------------------------------------------------------------- */
+/* Country spatial index                                                     */
+/* -------------------------------------------------------------------------- */
+
+type CountryBBox = {
+  feature: CountryFeature;
+  name: string;
+  minLon: number;
+  maxLon: number;
+  minLat: number;
+  maxLat: number;
+};
+
+const countryBBoxes: CountryBBox[] =
+  countryFeatures.features.map((country) => {
+    let minLon = 180;
+    let maxLon = -180;
+    let minLat = 90;
+    let maxLat = -90;
+
+    const traverse = (coords: unknown): void => {
+      if (
+        Array.isArray(coords) &&
+        typeof coords[0] === "number"
+      ) {
+        const lon = coords[0] as number;
+        const lat = coords[1] as number;
+
+        minLon = Math.min(minLon, lon);
+        maxLon = Math.max(maxLon, lon);
+        minLat = Math.min(minLat, lat);
+        maxLat = Math.max(maxLat, lat);
+
+        return;
+      }
+
+      if (Array.isArray(coords)) {
+        for (const child of coords) {
+          traverse(child);
+        }
+      }
+    };
+
+    if ("coordinates" in country.geometry) {
+      traverse(country.geometry.coordinates);
+    }
+
+    return {
+      feature: country,
+      name: country.properties.name,
+      minLon,
+      maxLon,
+      minLat,
+      maxLat,
+    };
+  });
+
+const GRID_COLS = 72;
+const GRID_ROWS = 36;
+
+const spatialGrid: CountryBBox[][] = Array.from(
+  {
+    length: GRID_COLS * GRID_ROWS,
+  },
+  () => [],
+);
+
+for (const bbox of countryBBoxes) {
+  const minX = Math.max(
+    0,
+    Math.min(
+      GRID_COLS - 1,
+      Math.floor((bbox.minLon + 180) / 5),
+    ),
   );
-}
 
-function createEarthTexture(palette: GlobePalette, hoveredCountry: CountryFeature | null) {
-  const canvas = document.createElement("canvas");
-  canvas.width = 2048;
-  canvas.height = 1024;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-  const { width, height } = canvas;
-  ctx.fillStyle = palette.ocean;
-  ctx.fillRect(0, 0, width, height);
-  // Three's sphere seam is at 90°W; the projection centers that seam correctly.
-  const projection = geoEquirectangular().rotate([-90, 0]).scale(width / (2 * Math.PI)).translate([width / 2, height / 2]);
-  const path = geoPath(projection, ctx);
-  ctx.beginPath();
-  path(countryFeatures);
-  ctx.fillStyle = palette.land;
-  ctx.fill();
-  ctx.strokeStyle = palette.outline;
-  ctx.lineWidth = 1.15;
-  ctx.stroke();
-  // Add a second subtle, displaced land wash for texture rather than flat fill.
-  ctx.beginPath();
-  path(countryFeatures);
-  ctx.fillStyle = palette.blue;
-  ctx.globalAlpha = 0.12;
-  ctx.fill();
-  ctx.globalAlpha = 1;
-  if (hoveredCountry) {
-    ctx.beginPath();
-    path(hoveredCountry);
-    ctx.fillStyle = palette.blue;
-    ctx.globalAlpha = 0.72;
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.strokeStyle = palette.blue;
-    ctx.lineWidth = 2.5;
-    ctx.stroke();
+  const maxX = Math.max(
+    0,
+    Math.min(
+      GRID_COLS - 1,
+      Math.floor((bbox.maxLon + 180) / 5),
+    ),
+  );
+
+  const minY = Math.max(
+    0,
+    Math.min(
+      GRID_ROWS - 1,
+      Math.floor((bbox.minLat + 90) / 5),
+    ),
+  );
+
+  const maxY = Math.max(
+    0,
+    Math.min(
+      GRID_ROWS - 1,
+      Math.floor((bbox.maxLat + 90) / 5),
+    ),
+  );
+
+  for (let y = minY; y <= maxY; y++) {
+    for (let x = minX; x <= maxX; x++) {
+      spatialGrid[y * GRID_COLS + x]!.push(
+        bbox,
+      );
+    }
   }
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  texture.anisotropy = 4;
-  return texture;
 }
 
-function Earth({ palette, hoveredCountry, onCountryHover }: { palette: GlobePalette; hoveredCountry: CountryFeature | null; onCountryHover: (country: CountryFeature | null) => void }) {
-  const texture = useMemo(() => createEarthTexture(palette, hoveredCountry), [palette, hoveredCountry]);
-  useEffect(() => () => texture?.dispose(), [texture]);
-  return (
-    <>
-      <mesh
-        onPointerMove={(event) => {
-          const direction = event.point.clone().normalize();
-          const latitude = Math.asin(THREE.MathUtils.clamp(direction.y, -1, 1)) / DEG;
-          const longitude = Math.atan2(direction.x, direction.z) / DEG;
-          const country = countryFeatures.features.find((candidate) => geoContains(candidate, [longitude, latitude])) ?? null;
-          onCountryHover(country);
-        }}
-        onPointerOut={() => onCountryHover(null)}
-      >
-        <sphereGeometry args={[RADIUS, 80, 48]} />
-        <meshStandardMaterial map={texture} color={palette.text} roughness={0.9} metalness={0.08} />
-      </mesh>
-      <mesh>
-        <sphereGeometry args={[RADIUS + 0.055, 64, 48]} />
-        <meshBasicMaterial color={palette.blue} transparent opacity={0.12} side={THREE.BackSide} />
-      </mesh>
-      <mesh>
-        <sphereGeometry args={[RADIUS + 0.19, 64, 48]} />
-        <meshBasicMaterial color={palette.blue} transparent opacity={0.055} side={THREE.BackSide} />
-      </mesh>
-    </>
+export function findCountryAt(
+  longitude: number,
+  latitude: number,
+  lastCountry: CountryFeature | null,
+): CountryFeature | null {
+  if (
+    lastCountry &&
+    geoContains(lastCountry, [
+      longitude,
+      latitude,
+    ])
+  ) {
+    return lastCountry;
+  }
+
+  const gx = Math.max(
+    0,
+    Math.min(
+      GRID_COLS - 1,
+      Math.floor((longitude + 180) / 5),
+    ),
   );
-}
 
-function GlobeMarker({ person, selected, dimmed, onSelect }: { person: Changemaker; selected: boolean; dimmed: boolean; onSelect: () => void }) {
-  const [hovered, setHovered] = useState(false);
-  const ring = useRef<THREE.Mesh>(null);
-  const reducedMotion = useRef(window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-  const position = useMemo(() => globePoint(person.latitude, person.longitude, RADIUS + 0.065), [person]);
-  const normal = useMemo(() => position.clone().normalize(), [position]);
-  const quaternion = useMemo(() => new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal), [normal]);
-  const color = categoryColor(person.category);
-  useFrame(({ clock }) => {
-    if (ring.current) {
-      const s = reducedMotion.current ? 1 : 1 + Math.sin(clock.elapsedTime * (selected ? 3.5 : 2.2)) * (selected ? 0.2 : 0.1);
-      ring.current.scale.setScalar(s);
+  const gy = Math.max(
+    0,
+    Math.min(
+      GRID_ROWS - 1,
+      Math.floor((latitude + 90) / 5),
+    ),
+  );
+
+  const candidates =
+    spatialGrid[gy * GRID_COLS + gx] ?? [];
+
+  for (const candidate of candidates) {
+    if (
+      longitude < candidate.minLon ||
+      longitude > candidate.maxLon ||
+      latitude < candidate.minLat ||
+      latitude > candidate.maxLat
+    ) {
+      continue;
     }
-  });
-  return (
-    <group position={position} quaternion={quaternion}>
-      <mesh ref={ring} position-z={0.015}>
-        <ringGeometry args={[selected ? 0.12 : 0.095, selected ? 0.145 : 0.112, 48]} />
-        <meshBasicMaterial color={color} transparent opacity={dimmed ? 0.18 : selected || hovered ? 1 : 0.68} side={THREE.DoubleSide} depthWrite={false} />
-      </mesh>
-      <mesh position-z={0.025}>
-        <sphereGeometry args={[selected ? 0.072 : 0.059, 20, 16]} />
-        <meshBasicMaterial color={color} transparent opacity={dimmed ? 0.28 : 1} />
-      </mesh>
-      <mesh
-        position-z={0.05}
-        onClick={(e) => { e.stopPropagation(); onSelect(); }}
-        onPointerOver={(e) => { e.stopPropagation(); setHovered(true); document.body.style.cursor = "pointer"; }}
-        onPointerOut={() => { setHovered(false); document.body.style.cursor = "auto"; }}
-      >
-        <sphereGeometry args={[0.17, 12, 10]} />
-        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
-      </mesh>
-    </group>
-  );
-}
 
-function ConnectionArc({ source, target, type, onClick }: { source: Changemaker; target: Changemaker; type: string; onClick: () => void }) {
-  const particle = useRef<THREE.Mesh>(null);
-  const reducedMotion = useRef(window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-  const color = type === "Mentorship" ? "#c59be8" : type === "Creative Partnership" ? "#e99ab7" : type === "Community Exchange" ? "#dfcb79" : type === "Collaboration" ? "#91d5ad" : "#83d9dc";
-  const curve = useMemo(() => {
-    const a = globePoint(source.latitude, source.longitude, RADIUS + 0.07);
-    const b = globePoint(target.latitude, target.longitude, RADIUS + 0.07);
-    const angle = a.angleTo(b);
-    const points = Array.from({ length: 33 }, (_, i) => {
-      const t = i / 32;
-      const direction = a.clone().lerp(b, t).normalize();
-      return direction.multiplyScalar(RADIUS + 0.075 + Math.sin(Math.PI * t) * (0.22 + angle * 0.32));
-    });
-    return new THREE.CatmullRomCurve3(points);
-  }, [source, target]);
-  useFrame(({ clock }) => {
-    if (particle.current && !reducedMotion.current) particle.current.position.copy(curve.getPoint((clock.elapsedTime * 0.13) % 1));
-  });
-  return (
-    <>
-      <mesh onClick={(e) => { e.stopPropagation(); onClick(); }} onPointerOver={() => { document.body.style.cursor = "pointer"; }} onPointerOut={() => { document.body.style.cursor = "auto"; }}>
-        <tubeGeometry args={[curve, 64, 0.018, 6, false]} />
-        <meshBasicMaterial color={color} transparent opacity={0.96} />
-      </mesh>
-      <mesh ref={particle} visible={!reducedMotion.current}>
-        <sphereGeometry args={[0.043, 12, 12]} />
-        <meshBasicMaterial color={color} />
-      </mesh>
-    </>
-  );
-}
-
-function FocusCamera({ person, focusVersion, resetVersion }: { person: Changemaker | undefined; focusVersion: number; resetVersion: number }) {
-  const target = useRef<THREE.Vector3 | null>(null);
-  const previousResetVersion = useRef(resetVersion);
-  const reducedMotion = useRef(window.matchMedia("(prefers-reduced-motion: reduce)").matches);
-  useEffect(() => {
-    target.current = person
-      ? globePoint(person.latitude, person.longitude, 8.2)
-      : previousResetVersion.current !== resetVersion
-        ? new THREE.Vector3(8.8, 2.2, -1.7)
-        : null;
-    previousResetVersion.current = resetVersion;
-  }, [person, focusVersion, resetVersion]);
-  useFrame(({ camera }, delta) => {
-    if (!target.current) return;
-    if (reducedMotion.current) {
-      camera.position.copy(target.current);
-    } else {
-      const amount = 1 - Math.exp(-2.2 * Math.min(delta, 0.05));
-      const distance = THREE.MathUtils.lerp(camera.position.length(), target.current.length(), amount);
-      camera.position.normalize().lerp(target.current.clone().normalize(), amount).normalize().multiplyScalar(distance);
+    if (
+      geoContains(candidate.feature, [
+        longitude,
+        latitude,
+      ])
+    ) {
+      return candidate.feature;
     }
-    camera.lookAt(0, 0, 0);
-    if (camera.position.distanceTo(target.current) < 0.015) target.current = null;
-  });
+  }
+
   return null;
 }
 
-export function GlobeExplorer({ people, connections, selectedId, focusVersion, resetVersion, networkMode = false, onSelect, onConnection, onFallback }: {
+/* -------------------------------------------------------------------------- */
+/* Person -> country                                                         */
+/* -------------------------------------------------------------------------- */
+
+const personCountryMap = new Map<
+  string,
+  string
+>();
+
+function resolvePersonCountry(
+  person: Changemaker,
+): string | undefined {
+  const cached = personCountryMap.get(
+    person.id,
+  );
+
+  if (cached) return cached;
+
+  for (const bbox of countryBBoxes) {
+    if (
+      person.longitude < bbox.minLon ||
+      person.longitude > bbox.maxLon ||
+      person.latitude < bbox.minLat ||
+      person.latitude > bbox.maxLat
+    ) {
+      continue;
+    }
+
+    if (
+      geoContains(bbox.feature, [
+        person.longitude,
+        person.latitude,
+      ])
+    ) {
+      personCountryMap.set(
+        person.id,
+        bbox.name,
+      );
+
+      return bbox.name;
+    }
+  }
+
+  return undefined;
+}
+
+export function getPersonCountryName(
+  person: Changemaker,
+): string | undefined {
+  return resolvePersonCountry(person);
+}
+
+/* -------------------------------------------------------------------------- */
+/* Palette                                                                    */
+/* -------------------------------------------------------------------------- */
+
+export function readGlobePalette(): GlobePalette {
+  if (typeof document === "undefined") {
+    return {
+      ocean: "#121715",
+      land: "#1e2823",
+      outline: "#405247",
+      blue: "#38bdf8",
+      text: "#f0fdf4",
+    };
+  }
+
+  const styles =
+    getComputedStyle(
+      document.documentElement,
+    );
+
+  return {
+    ocean:
+      styles
+        .getPropertyValue(
+          "--surface-strong",
+        )
+        .trim() || "#121715",
+
+    land:
+      styles
+        .getPropertyValue(
+          "--surface-muted",
+        )
+        .trim() || "#1e2823",
+
+    outline:
+      styles
+        .getPropertyValue(
+          "--text-tertiary",
+        )
+        .trim() || "#405247",
+
+    blue:
+      styles
+        .getPropertyValue(
+          "--accent-blue",
+        )
+        .trim() || "#38bdf8",
+
+    text:
+      styles
+        .getPropertyValue(
+          "--text-primary",
+        )
+        .trim() || "#f0fdf4",
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Globe coordinates                                                          */
+/* -------------------------------------------------------------------------- */
+
+export function globePoint(
+  latitude: number,
+  longitude: number,
+  radius = RADIUS,
+) {
+  const lat = latitude * DEG;
+  const lon = longitude * DEG;
+
+  return new THREE.Vector3(
+    radius *
+      Math.cos(lat) *
+      Math.sin(lon),
+
+    radius * Math.sin(lat),
+
+    radius *
+      Math.cos(lat) *
+      Math.cos(lon),
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Base earth texture                                                         */
+/* -------------------------------------------------------------------------- */
+
+function createBaseEarthTexture(
+  palette: GlobePalette,
+): THREE.CanvasTexture {
+  const canvas =
+    document.createElement("canvas");
+
+  canvas.width = TEXTURE_WIDTH;
+  canvas.height = TEXTURE_HEIGHT;
+
+  const ctx = canvas.getContext("2d");
+
+  if (!ctx) {
+    throw new Error(
+      "Unable to create globe texture canvas.",
+    );
+  }
+
+  ctx.fillStyle = palette.ocean;
+  ctx.fillRect(
+    0,
+    0,
+    TEXTURE_WIDTH,
+    TEXTURE_HEIGHT,
+  );
+
+  const path = geoPath(
+    projection,
+    ctx,
+  );
+
+  ctx.beginPath();
+  path(countryFeatures);
+
+  ctx.fillStyle = palette.land;
+  ctx.fill();
+
+  ctx.strokeStyle = palette.outline;
+  ctx.lineWidth = 1.15;
+  ctx.stroke();
+
+  /*
+   * Subtle blue land wash.
+   */
+  ctx.beginPath();
+  path(countryFeatures);
+
+  ctx.fillStyle = palette.blue;
+  ctx.globalAlpha = 0.12;
+  ctx.fill();
+
+  ctx.globalAlpha = 1;
+
+  const texture =
+    new THREE.CanvasTexture(canvas);
+
+  texture.colorSpace =
+    THREE.SRGBColorSpace;
+
+  texture.anisotropy = 4;
+
+  return texture;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Country highlight texture                                                 */
+/* -------------------------------------------------------------------------- */
+
+function createCountryHighlightTexture(
+  country: CountryFeature,
+  palette: GlobePalette,
+): THREE.CanvasTexture | null {
+  const canvas =
+    document.createElement("canvas");
+
+  canvas.width = TEXTURE_WIDTH;
+  canvas.height = TEXTURE_HEIGHT;
+
+  const ctx = canvas.getContext("2d");
+
+  if (!ctx) return null;
+
+  const path = geoPath(
+    projection,
+    ctx,
+  );
+
+  ctx.clearRect(
+    0,
+    0,
+    TEXTURE_WIDTH,
+    TEXTURE_HEIGHT,
+  );
+
+  ctx.beginPath();
+  path(country);
+
+  ctx.fillStyle = palette.blue;
+  ctx.globalAlpha = 0.72;
+  ctx.fill();
+
+  ctx.globalAlpha = 1;
+
+  ctx.strokeStyle = palette.blue;
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+
+  const texture =
+    new THREE.CanvasTexture(canvas);
+
+  texture.colorSpace =
+    THREE.SRGBColorSpace;
+
+  texture.needsUpdate = true;
+
+  return texture;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Static environment                                                         */
+/* -------------------------------------------------------------------------- */
+
+export const StaticGlobeEnvironment =
+  React.memo(function StaticGlobeEnvironment({
+    palette,
+  }: {
+    palette: GlobePalette;
+  }) {
+    return (
+      <>
+        <ambientLight intensity={1} />
+
+        <directionalLight
+          position={[4, 3, 6]}
+          intensity={0}
+        />
+
+        <directionalLight
+          position={[-5, -1, -3]}
+          intensity={0}
+        />
+
+        <Environment>
+          <Lightformer
+            intensity={1.8}
+            position={[0, 5, 5]}
+            scale={[10, 10, 1]}
+          />
+
+          <Lightformer
+            intensity={0.8}
+            color={palette.blue}
+            position={[-5, 1, -1]}
+            rotation-y={Math.PI / 2}
+            scale={[20, 1, 1]}
+          />
+        </Environment>
+
+        <Stars
+          radius={40}
+          depth={35}
+          count={420}
+          factor={2.2}
+          saturation={0}
+          fade
+          speed={0.08}
+        />
+
+        <mesh>
+          <sphereGeometry
+            args={[
+              RADIUS + 0.055,
+              64,
+              48,
+            ]}
+          />
+
+          <meshBasicMaterial
+            color={palette.blue}
+            transparent
+            opacity={0.12}
+            side={THREE.BackSide}
+            depthWrite={false}
+          />
+        </mesh>
+
+        <mesh>
+          <sphereGeometry
+            args={[
+              RADIUS + 0.19,
+              64,
+              48,
+            ]}
+          />
+
+          <meshBasicMaterial
+            color={palette.blue}
+            transparent
+            opacity={0.055}
+            side={THREE.BackSide}
+            depthWrite={false}
+          />
+        </mesh>
+      </>
+    );
+  });
+
+/* -------------------------------------------------------------------------- */
+/* Earth layer                                                                */
+/* -------------------------------------------------------------------------- */
+
+export const EarthLayer = React.memo(
+  function EarthLayer({
+    palette,
+    hoveredCountry,
+    onCountryHover,
+  }: {
+    palette: GlobePalette;
+    hoveredCountry: CountryFeature | null;
+    onCountryHover: (
+      country: CountryFeature | null,
+    ) => void;
+  }) {
+    const lastHoveredRef =
+      useRef<CountryFeature | null>(
+        null,
+      );
+
+    const rafRef =
+      useRef<number | null>(null);
+
+    const pendingPointRef =
+      useRef<THREE.Vector3 | null>(
+        null,
+      );
+
+    /*
+     * Base texture is independent of hover.
+     */
+    const baseTexture = useMemo(
+      () =>
+        createBaseEarthTexture(
+          palette,
+        ),
+      [palette],
+    );
+
+    /*
+     * Hover texture only changes when the
+     * country changes.
+     */
+    const highlightTexture =
+      useMemo(() => {
+        if (!hoveredCountry) {
+          return null;
+        }
+
+        return createCountryHighlightTexture(
+          hoveredCountry,
+          palette,
+        );
+      }, [
+        hoveredCountry,
+        palette,
+      ]);
+
+    useEffect(() => {
+      return () => {
+        baseTexture.dispose();
+        highlightTexture?.dispose();
+      };
+    }, [
+      baseTexture,
+      highlightTexture,
+    ]);
+
+    const processPointerHover =
+      useCallback(() => {
+        rafRef.current = null;
+
+        const point =
+          pendingPointRef.current;
+
+        if (!point) return;
+
+        const direction =
+          point.clone().normalize();
+
+        const latitude =
+          Math.asin(
+            THREE.MathUtils.clamp(
+              direction.y,
+              -1,
+              1,
+            ),
+          ) / DEG;
+
+        const longitude =
+          Math.atan2(
+            direction.x,
+            direction.z,
+          ) / DEG;
+
+        const country =
+          findCountryAt(
+            longitude,
+            latitude,
+            lastHoveredRef.current,
+          );
+
+        if (
+          country !==
+          lastHoveredRef.current
+        ) {
+          lastHoveredRef.current =
+            country;
+
+          onCountryHover(country);
+        }
+      }, [onCountryHover]);
+
+    const handlePointerMove =
+      useCallback(
+        (event: {
+          point: THREE.Vector3;
+        }) => {
+          pendingPointRef.current =
+            event.point;
+
+          if (
+            rafRef.current === null
+          ) {
+            rafRef.current =
+              requestAnimationFrame(
+                processPointerHover,
+              );
+          }
+        },
+        [processPointerHover],
+      );
+
+    const handlePointerOut =
+      useCallback(() => {
+        if (
+          rafRef.current !== null
+        ) {
+          cancelAnimationFrame(
+            rafRef.current,
+          );
+
+          rafRef.current = null;
+        }
+
+        pendingPointRef.current =
+          null;
+
+        if (
+          lastHoveredRef.current !==
+          null
+        ) {
+          lastHoveredRef.current =
+            null;
+
+          onCountryHover(null);
+        }
+      }, [onCountryHover]);
+
+    return (
+      <group>
+        {/* Base globe: deliberately unlit for constant brightness */}
+        <mesh
+          onPointerMove={
+            handlePointerMove
+          }
+          onPointerOut={
+            handlePointerOut
+          }
+        >
+          <sphereGeometry
+            args={[RADIUS, 80, 48]}
+          />
+
+          <meshBasicMaterial
+            map={baseTexture}
+            color={palette.text}
+            toneMapped={false}
+          />
+        </mesh>
+
+        {/* Country highlight layer */}
+        {highlightTexture && (
+          <mesh
+            scale={[
+              1.0008,
+              1.0008,
+              1.0008,
+            ]}
+          >
+            <sphereGeometry
+              args={[RADIUS, 80, 48]}
+            />
+
+            <meshBasicMaterial
+              map={highlightTexture}
+              transparent
+              depthWrite={false}
+              toneMapped={false}
+            />
+          </mesh>
+        )}
+      </group>
+    );
+  },
+);
+
+/* -------------------------------------------------------------------------- */
+/* Marker layer                                                               */
+/* -------------------------------------------------------------------------- */
+
+type MarkerGroupProps = {
+  people: Changemaker[];
+  positions: THREE.Vector3[];
+  color: string;
+  dimmedIds: Set<string>;
+  hoveredMarkerId: string | null;
+  onSelect: (id: string) => void;
+  onHoverMarker: (
+    id: string | null,
+  ) => void;
+};
+
+const CategoryInstancedGroup =
+  React.memo(
+    function CategoryInstancedGroup({
+      people,
+      positions,
+      color,
+      dimmedIds,
+      hoveredMarkerId,
+      onSelect,
+      onHoverMarker,
+    }: MarkerGroupProps) {
+      const meshRef =
+        useRef<THREE.InstancedMesh>(
+          null,
+        );
+
+      const dummy =
+        useMemo(
+          () =>
+            new THREE.Object3D(),
+          [],
+        );
+
+      const geometry =
+        useMemo(
+          () =>
+            new THREE.SphereGeometry(
+              0.038,
+              8,
+              6,
+            ),
+          [],
+        );
+
+      useEffect(() => {
+        return () =>
+          geometry.dispose();
+      }, [geometry]);
+
+      /*
+       * Update instance matrices.
+       *
+       * No useFrame.
+       */
+      useEffect(() => {
+        const mesh =
+          meshRef.current;
+
+        if (!mesh) return;
+
+        for (
+          let i = 0;
+          i < people.length;
+          i++
+        ) {
+          const person =
+            people[i]!;
+
+          dummy.position.copy(
+            positions[i]!,
+          );
+
+          /*
+           * Hover only slightly enlarges
+           * the actual dot.
+           */
+          const scale =
+            hoveredMarkerId ===
+            person.id
+              ? 1.55
+              : 1;
+
+          dummy.scale.setScalar(
+            scale,
+          );
+
+          dummy.updateMatrix();
+
+          mesh.setMatrixAt(
+            i,
+            dummy.matrix,
+          );
+        }
+
+        mesh.instanceMatrix.needsUpdate =
+          true;
+      }, [
+        people,
+        positions,
+        hoveredMarkerId,
+        dummy,
+      ]);
+
+      const handlePointerOver =
+        useCallback(
+          (event: {
+            stopPropagation: () => void;
+            instanceId?: number;
+          }) => {
+            if (
+              event.instanceId ===
+              undefined
+            ) {
+              return;
+            }
+
+            const person =
+              people[
+                event.instanceId
+              ];
+
+            if (!person) return;
+
+            event.stopPropagation();
+
+            onHoverMarker(
+              person.id,
+            );
+
+            document.body.style.cursor =
+              "pointer";
+          },
+          [
+            people,
+            onHoverMarker,
+          ],
+        );
+
+      const handlePointerOut =
+        useCallback(() => {
+          onHoverMarker(null);
+          document.body.style.cursor =
+            "auto";
+        }, [onHoverMarker]);
+
+      const handleClick =
+        useCallback(
+          (event: {
+            stopPropagation: () => void;
+            instanceId?: number;
+          }) => {
+            if (
+              event.instanceId ===
+              undefined
+            ) {
+              return;
+            }
+
+            const person =
+              people[
+                event.instanceId
+              ];
+
+            if (!person) return;
+
+            event.stopPropagation();
+
+            onSelect(person.id);
+          },
+          [
+            people,
+            onSelect,
+          ],
+        );
+
+      const opacity =
+        dimmedIds.size > 0
+          ? 0.28
+          : 0.9;
+
+      return (
+        <instancedMesh
+          ref={meshRef}
+          args={[
+            geometry,
+            undefined,
+            people.length,
+          ]}
+          onPointerOver={
+            handlePointerOver
+          }
+          onPointerOut={
+            handlePointerOut
+          }
+          onClick={handleClick}
+        >
+          <meshBasicMaterial
+            color={color}
+            transparent
+            opacity={opacity}
+            depthWrite={false}
+            toneMapped={false}
+          />
+        </instancedMesh>
+      );
+    },
+  );
+
+/* -------------------------------------------------------------------------- */
+/* Marker layer                                                               */
+/* -------------------------------------------------------------------------- */
+
+export const MarkerLayer =
+  React.memo(function MarkerLayer({
+    people,
+    selectedId,
+    hoveredMarkerId,
+    dimmedIds,
+    onSelect,
+    onHoverMarker,
+  }: {
+    people: Changemaker[];
+    selectedId: string | null;
+    hoveredMarkerId: string | null;
+    dimmedIds: Set<string>;
+    onSelect: (id: string) => void;
+    onHoverMarker: (
+      id: string | null,
+    ) => void;
+  }) {
+    const positions = useMemo(
+      () =>
+        people.map((person) =>
+          globePoint(
+            person.latitude,
+            person.longitude,
+            RADIUS + 0.055,
+          ),
+        ),
+      [people],
+    );
+
+    const groups = useMemo(() => {
+      const map =
+        new Map<
+          string,
+          {
+            people: Changemaker[];
+            positions: THREE.Vector3[];
+          }
+        >();
+
+      for (
+        let i = 0;
+        i < people.length;
+        i++
+      ) {
+        const person =
+          people[i]!;
+
+        /*
+         * Selected marker is rendered separately.
+         */
+        if (
+          person.id ===
+          selectedId
+        ) {
+          continue;
+        }
+
+        let group =
+          map.get(
+            person.category,
+          );
+
+        if (!group) {
+          group = {
+            people: [],
+            positions: [],
+          };
+
+          map.set(
+            person.category,
+            group,
+          );
+        }
+
+        group.people.push(person);
+        group.positions.push(
+          positions[i]!,
+        );
+      }
+
+      return Array.from(
+        map.entries(),
+      ).map(
+        ([
+          category,
+          group,
+        ]) => ({
+          category,
+          color:
+            categoryColor(
+              category,
+            ),
+          ...group,
+        }),
+      );
+    }, [
+      people,
+      positions,
+      selectedId,
+    ]);
+
+    const selectedPerson =
+      useMemo(
+        () =>
+          people.find(
+            (person) =>
+              person.id ===
+              selectedId,
+          ),
+        [people, selectedId],
+      );
+
+    const selectedPosition =
+      useMemo(() => {
+        if (!selectedPerson) {
+          return null;
+        }
+
+        return globePoint(
+          selectedPerson.latitude,
+          selectedPerson.longitude,
+          RADIUS + 0.06,
+        );
+      }, [selectedPerson]);
+
+    return (
+      <group>
+        {groups.map(
+          (group) => (
+            <CategoryInstancedGroup
+              key={group.category}
+              people={
+                group.people
+              }
+              positions={
+                group.positions
+              }
+              color={
+                group.color
+              }
+              dimmedIds={
+                dimmedIds
+              }
+              hoveredMarkerId={
+                hoveredMarkerId
+              }
+              onSelect={
+                onSelect
+              }
+              onHoverMarker={
+                onHoverMarker
+              }
+            />
+          ),
+        )}
+
+        {selectedPerson &&
+          selectedPosition && (
+            <group
+              position={
+                selectedPosition
+              }
+            >
+              {/* Static subtle halo */}
+              <mesh>
+                <sphereGeometry
+                  args={[
+                    0.075,
+                    12,
+                    8,
+                  ]}
+                />
+
+                <meshBasicMaterial
+                  color={categoryColor(
+                    selectedPerson.category,
+                  )}
+                  transparent
+                  opacity={0.28}
+                  depthWrite={false}
+                  toneMapped={false}
+                />
+              </mesh>
+
+              {/* Main selected dot */}
+              <mesh>
+                <sphereGeometry
+                  args={[
+                    0.055,
+                    10,
+                    8,
+                  ]}
+                />
+
+                <meshBasicMaterial
+                  color={categoryColor(
+                    selectedPerson.category,
+                  )}
+                  toneMapped={false}
+                />
+              </mesh>
+            </group>
+          )}
+      </group>
+    );
+  });
+
+/* -------------------------------------------------------------------------- */
+/* Connections                                                                */
+/* -------------------------------------------------------------------------- */
+
+function getConnectionColor(
+  type: string,
+): string {
+  switch (type) {
+    case "Mentorship":
+      return "#c59be8";
+
+    case "Creative Partnership":
+      return "#e99ab7";
+
+    case "Community Exchange":
+      return "#dfcb79";
+
+    case "Collaboration":
+      return "#91d5ad";
+
+    default:
+      return "#83d9dc";
+  }
+}
+
+export const ConnectionLayer =
+  React.memo(function ConnectionLayer({
+    connections,
+    byId,
+    selectedId,
+    networkMode,
+    reducedMotion,
+    onConnection,
+  }: {
+    connections: Connection[];
+    byId: Map<
+      string,
+      Changemaker
+    >;
+    selectedId: string | null;
+    networkMode: boolean;
+    reducedMotion: boolean;
+    onConnection: (
+      connection: Connection,
+    ) => void;
+  }) {
+    const activeConnections =
+      useMemo(() => {
+        if (
+          !selectedId &&
+          !networkMode
+        ) {
+          return [];
+        }
+
+        return connections.filter(
+          (connection) => {
+            const source =
+              byId.get(
+                connection.sourceId,
+              );
+
+            const target =
+              byId.get(
+                connection.targetId,
+              );
+
+            if (
+              !source ||
+              !target
+            ) {
+              return false;
+            }
+
+            if (
+              selectedId &&
+              connection.sourceId !==
+                selectedId &&
+              connection.targetId !==
+                selectedId
+            ) {
+              return false;
+            }
+
+            return true;
+          },
+        );
+      }, [
+        connections,
+        byId,
+        selectedId,
+        networkMode,
+      ]);
+
+    const curves = useMemo(
+      () =>
+        activeConnections.map(
+          (connection) => {
+            const source =
+              byId.get(
+                connection.sourceId,
+              )!;
+
+            const target =
+              byId.get(
+                connection.targetId,
+              )!;
+
+            const a =
+              globePoint(
+                source.latitude,
+                source.longitude,
+                RADIUS + 0.07,
+              );
+
+            const b =
+              globePoint(
+                target.latitude,
+                target.longitude,
+                RADIUS + 0.07,
+              );
+
+            const angle =
+              a.angleTo(b);
+
+            const points =
+              Array.from(
+                {
+                  length: 25,
+                },
+                (_, i) => {
+                  const t =
+                    i / 24;
+
+                  const direction =
+                    a
+                      .clone()
+                      .lerp(
+                        b,
+                        t,
+                      )
+                      .normalize();
+
+                  return direction.multiplyScalar(
+                    RADIUS +
+                      0.075 +
+                      Math.sin(
+                        Math.PI * t,
+                      ) *
+                        (0.22 +
+                          angle *
+                            0.32),
+                  );
+                },
+              );
+
+            const curve =
+              new THREE.CatmullRomCurve3(
+                points,
+              );
+
+            return {
+              connection,
+              curve,
+              color:
+                getConnectionColor(
+                  connection.type,
+                ),
+            };
+          },
+        ),
+      [
+        activeConnections,
+        byId,
+      ],
+    );
+
+    const particleMesh =
+      useRef<THREE.InstancedMesh>(
+        null,
+      );
+
+    const particleGeometry =
+      useMemo(
+        () =>
+          new THREE.SphereGeometry(
+            0.043,
+            8,
+            6,
+          ),
+        [],
+      );
+
+    const dummy =
+      useMemo(
+        () =>
+          new THREE.Object3D(),
+        [],
+      );
+
+    useEffect(() => {
+      return () =>
+        particleGeometry.dispose();
+    }, [
+      particleGeometry,
+    ]);
+
+    useFrame(
+      ({ clock }) => {
+        if (
+          reducedMotion ||
+          !particleMesh.current ||
+          curves.length === 0
+        ) {
+          return;
+        }
+
+        const mesh =
+          particleMesh.current;
+
+        const time =
+          clock.elapsedTime *
+          0.13;
+
+        for (
+          let i = 0;
+          i < curves.length;
+          i++
+        ) {
+          const curve =
+            curves[i]!.curve;
+
+          const point =
+            curve.getPoint(
+              (time +
+                i * 0.33) %
+                1,
+            );
+
+          dummy.position.copy(
+            point,
+          );
+
+          dummy.updateMatrix();
+
+          mesh.setMatrixAt(
+            i,
+            dummy.matrix,
+          );
+        }
+
+        mesh.instanceMatrix.needsUpdate =
+          true;
+      },
+    );
+
+    if (curves.length === 0) {
+      return null;
+    }
+
+    return (
+      <group>
+        {curves.map(
+          ({
+            connection,
+            curve,
+            color,
+          }) => (
+            <ConnectionTube
+              key={
+                connection.id
+              }
+              curve={curve}
+              color={color}
+              onClick={() =>
+                onConnection(
+                  connection,
+                )
+              }
+            />
+          ),
+        )}
+
+        {!reducedMotion && (
+          <instancedMesh
+            ref={particleMesh}
+            args={[
+              particleGeometry,
+              undefined,
+              curves.length,
+            ]}
+          >
+            <meshBasicMaterial
+              color="#ffffff"
+              toneMapped={false}
+            />
+          </instancedMesh>
+        )}
+      </group>
+    );
+  });
+
+function ConnectionTube({
+  curve,
+  color,
+  onClick,
+}: {
+  curve: THREE.CatmullRomCurve3;
+  color: string;
+  onClick: () => void;
+}) {
+  const geometry = useMemo(
+    () =>
+      new THREE.TubeGeometry(
+        curve,
+        28,
+        0.02,
+        4,
+        false,
+      ),
+    [curve],
+  );
+
+  useEffect(() => {
+    return () =>
+      geometry.dispose();
+  }, [geometry]);
+
+  return (
+    <mesh
+      geometry={geometry}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+      onPointerOver={() => {
+        document.body.style.cursor =
+          "pointer";
+      }}
+      onPointerOut={() => {
+        document.body.style.cursor =
+          "auto";
+      }}
+    >
+      <meshBasicMaterial
+        color={color}
+        transparent
+        opacity={0.96}
+        toneMapped={false}
+      />
+    </mesh>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Camera                                                                     */
+/* -------------------------------------------------------------------------- */
+
+export const CameraController =
+  React.memo(function CameraController({
+    person,
+    focusVersion,
+    resetVersion,
+    reducedMotion,
+  }: {
+    person:
+      | Changemaker
+      | undefined;
+    focusVersion: number;
+    resetVersion: number;
+    reducedMotion: boolean;
+  }) {
+    const target =
+      useRef<THREE.Vector3 | null>(
+        null,
+      );
+
+    const previousResetVersion =
+      useRef(resetVersion);
+
+    useEffect(() => {
+      if (person) {
+        target.current =
+          globePoint(
+            person.latitude,
+            person.longitude,
+            8.2,
+          );
+      } else if (
+        previousResetVersion.current !==
+        resetVersion
+      ) {
+        target.current =
+          new THREE.Vector3(
+            8.8,
+            2.2,
+            -1.7,
+          );
+      }
+
+      previousResetVersion.current =
+        resetVersion;
+    }, [
+      person,
+      focusVersion,
+      resetVersion,
+    ]);
+
+    useFrame(
+      ({ camera }, delta) => {
+        if (!target.current) {
+          return;
+        }
+
+        if (reducedMotion) {
+          camera.position.copy(
+            target.current,
+          );
+
+          camera.lookAt(
+            0,
+            0,
+            0,
+          );
+
+          target.current =
+            null;
+
+          return;
+        }
+
+        const amount =
+          1 -
+          Math.exp(
+            -2.2 *
+              Math.min(
+                delta,
+                0.05,
+              ),
+          );
+
+        const targetDirection =
+          target.current
+            .clone()
+            .normalize();
+
+        camera.position
+          .normalize()
+          .lerp(
+            targetDirection,
+            amount,
+          )
+          .normalize()
+          .multiplyScalar(
+            THREE.MathUtils.lerp(
+              camera.position.length(),
+              target.current.length(),
+              amount,
+            ),
+          );
+
+        camera.lookAt(
+          0,
+          0,
+          0,
+        );
+
+        if (
+          camera.position.distanceTo(
+            target.current,
+          ) < 0.015
+        ) {
+          target.current =
+            null;
+        }
+      },
+    );
+
+    return null;
+  });
+
+/* -------------------------------------------------------------------------- */
+/* Main component                                                             */
+/* -------------------------------------------------------------------------- */
+
+export function GlobeExplorer({
+  people,
+  connections,
+  selectedId,
+  focusVersion,
+  resetVersion,
+  networkMode = false,
+  onSelect,
+  onConnection,
+  onFallback,
+}: {
   people: Changemaker[];
   connections: Connection[];
   selectedId: string | null;
@@ -226,45 +1728,372 @@ export function GlobeExplorer({ people, connections, selectedId, focusVersion, r
   resetVersion: number;
   networkMode?: boolean;
   onSelect: (id: string) => void;
-  onConnection: (connection: Connection) => void;
+  onConnection: (
+    connection: Connection,
+  ) => void;
   onFallback: () => void;
 }) {
-  const palette = useMemo(readGlobePalette, []);
-  const [hoveredCountry, setHoveredCountry] = useState<CountryFeature | null>(null);
-  const countryCounts = useMemo(() => new Map(countryFeatures.features.map((country) => [
-    country.properties.name,
-    people.filter((person) => geoContains(country, [person.longitude, person.latitude])).length,
-  ])), [people]);
-  const hoveredCountryCount = hoveredCountry ? countryCounts.get(hoveredCountry.properties.name) ?? 0 : 0;
-  const selected = people.find((person) => person.id === selectedId);
-  const byId = useMemo(() => new Map(people.map((p) => [p.id, p])), [people]);
-  const connectedIds = useMemo(() => new Set(connections.flatMap((connection) => [connection.sourceId, connection.targetId])), [connections]);
+  const palette =
+    useMemo(
+      readGlobePalette,
+      [],
+    );
+
+  const [
+    hoveredCountry,
+    setHoveredCountry,
+  ] =
+    useState<CountryFeature | null>(
+      null,
+    );
+
+  const [
+    hoveredMarkerId,
+    setHoveredMarkerId,
+  ] =
+    useState<string | null>(
+      null,
+    );
+
+  const [
+    reducedMotion,
+    setReducedMotion,
+  ] =
+    useState(false);
+
+  useEffect(() => {
+    const media =
+      window.matchMedia(
+        "(prefers-reduced-motion: reduce)",
+      );
+
+    setReducedMotion(
+      media.matches,
+    );
+
+    const listener = (
+      event: MediaQueryListEvent,
+    ) => {
+      setReducedMotion(
+        event.matches,
+      );
+    };
+
+    media.addEventListener(
+      "change",
+      listener,
+    );
+
+    return () =>
+      media.removeEventListener(
+        "change",
+        listener,
+      );
+  }, []);
+
+  const byId = useMemo(
+    () =>
+      new Map(
+        people.map(
+          (person) => [
+            person.id,
+            person,
+          ],
+        ),
+      ),
+    [people],
+  );
+
+  const selected =
+    selectedId
+      ? byId.get(
+          selectedId,
+        )
+      : undefined;
+
+  const countryCounts =
+    useMemo(() => {
+      const counts =
+        new Map<
+          string,
+          number
+        >();
+
+      for (const person of people) {
+        const country =
+          getPersonCountryName(
+            person,
+          );
+
+        if (!country) {
+          continue;
+        }
+
+        counts.set(
+          country,
+          (counts.get(
+            country,
+          ) ?? 0) + 1,
+        );
+      }
+
+      return counts;
+    }, [people]);
+
+  const hoveredCountryCount =
+    hoveredCountry
+      ? countryCounts.get(
+          hoveredCountry
+            .properties
+            .name,
+        ) ?? 0
+      : 0;
+
+  const connectedIds =
+    useMemo(
+      () =>
+        new Set(
+          connections.flatMap(
+            (connection) => [
+              connection.sourceId,
+              connection.targetId,
+            ],
+          ),
+        ),
+      [connections],
+    );
+
+  const relatedIds =
+    useMemo(() => {
+      if (!selectedId) {
+        return null;
+      }
+
+      const result =
+        new Set<string>();
+
+      result.add(
+        selectedId,
+      );
+
+      for (const connection of connections) {
+        if (
+          connection.sourceId ===
+          selectedId
+        ) {
+          result.add(
+            connection.targetId,
+          );
+        }
+
+        if (
+          connection.targetId ===
+          selectedId
+        ) {
+          result.add(
+            connection.sourceId,
+          );
+        }
+      }
+
+      return result;
+    }, [
+      selectedId,
+      connections,
+    ]);
+
+  const dimmedIds =
+    useMemo(() => {
+      const result =
+        new Set<string>();
+
+      if (
+        selectedId &&
+        relatedIds
+      ) {
+        for (const person of people) {
+          if (
+            !relatedIds.has(
+              person.id,
+            )
+          ) {
+            result.add(
+              person.id,
+            );
+          }
+        }
+      } else if (
+        networkMode
+      ) {
+        for (const person of people) {
+          if (
+            !connectedIds.has(
+              person.id,
+            )
+          ) {
+            result.add(
+              person.id,
+            );
+          }
+        }
+      }
+
+      return result;
+    }, [
+      people,
+      selectedId,
+      relatedIds,
+      networkMode,
+      connectedIds,
+    ]);
+
   return (
-    <div className="globe-canvas" aria-label="Interactive globe showing changemaker locations">
-      <Canvas fallback={<div className="globe-fallback"><strong>3D exploration isn't available on this device.</strong><span>You can still explore the network.</span><button type="button" onClick={onFallback}>Browse changemakers <ArrowRight size={15} /></button></div>} camera={{ position: [8.8, 2.2, -1.7], fov: 42 }} dpr={[1, 1.35]} gl={{ antialias: true, alpha: true }}>
-        <ambientLight intensity={1.15} />
-        <directionalLight position={[4, 3, 6]} intensity={2.3} color={palette.text} />
-        <directionalLight position={[-5, -1, -3]} intensity={0.8} color={palette.blue} />
-        <Environment>
-          <Lightformer intensity={1.8} position={[0, 5, 5]} scale={[10, 10, 1]} />
-          <Lightformer intensity={0.8} color={palette.blue} position={[-5, 1, -1]} rotation-y={Math.PI / 2} scale={[20, 1, 1]} />
-        </Environment>
-        <Stars radius={40} depth={35} count={420} factor={2.2} saturation={0} fade speed={0.08} />
-        <Earth palette={palette} hoveredCountry={hoveredCountry} onCountryHover={setHoveredCountry} />
-        {people.map((person) => {
-          const dimmed = selectedId ? person.id !== selectedId && !connections.some((connection) => connectedIds.has(person.id) && (connection.sourceId === selectedId || connection.targetId === selectedId) && (connection.sourceId === person.id || connection.targetId === person.id)) : networkMode && !connectedIds.has(person.id);
-          return <GlobeMarker key={person.id} person={person} selected={selectedId === person.id} dimmed={dimmed} onSelect={() => onSelect(person.id)} />;
-        })}
-        {(selectedId || networkMode) && connections.map((connection) => {
-          const source = byId.get(connection.sourceId);
-          const target = byId.get(connection.targetId);
-          if (!source || !target || (selectedId && connection.sourceId !== selectedId && connection.targetId !== selectedId)) return null;
-          return <ConnectionArc key={connection.id} source={source} target={target} type={connection.type} onClick={() => onConnection(connection)} />;
-        })}
-        <OrbitControls enableDamping dampingFactor={0.08} minDistance={4.3} maxDistance={12} enablePan={false} rotateSpeed={0.6} zoomSpeed={0.7} />
-        <FocusCamera person={selected} focusVersion={focusVersion} resetVersion={resetVersion} />
+    <div
+      className="globe-canvas"
+      aria-label="Interactive globe showing changemaker locations"
+    >
+      <Canvas
+        fallback={
+          <div className="globe-fallback">
+            <strong>
+              3D exploration isn't
+              available on this
+              device.
+            </strong>
+
+            <span>
+              You can still
+              explore the network.
+            </span>
+
+            <button
+              type="button"
+              onClick={
+                onFallback
+              }
+            >
+              Browse changemakers
+              <ArrowRight
+                size={15}
+              />
+            </button>
+          </div>
+        }
+        camera={{
+          position: [
+            8.8,
+            2.2,
+            -1.7,
+          ],
+          fov: 42,
+        }}
+        dpr={[1, 1.35]}
+        gl={{
+          antialias: true,
+          alpha: true,
+        }}
+      >
+        <StaticGlobeEnvironment
+          palette={palette}
+        />
+
+        <EarthLayer
+          palette={palette}
+          hoveredCountry={
+            hoveredCountry
+          }
+          onCountryHover={
+            setHoveredCountry
+          }
+        />
+
+        <MarkerLayer
+          people={people}
+          selectedId={
+            selectedId
+          }
+          hoveredMarkerId={
+            hoveredMarkerId
+          }
+          dimmedIds={
+            dimmedIds
+          }
+          onSelect={
+            onSelect
+          }
+          onHoverMarker={
+            setHoveredMarkerId
+          }
+        />
+
+        <ConnectionLayer
+          connections={
+            connections
+          }
+          byId={byId}
+          selectedId={
+            selectedId
+          }
+          networkMode={
+            networkMode
+          }
+          reducedMotion={
+            reducedMotion
+          }
+          onConnection={
+            onConnection
+          }
+        />
+
+        <OrbitControls
+          enableDamping
+          dampingFactor={0.08}
+          minDistance={4.3}
+          maxDistance={12}
+          enablePan={false}
+          rotateSpeed={0.6}
+          zoomSpeed={0.7}
+        />
+
+        <CameraController
+          person={selected}
+          focusVersion={
+            focusVersion
+          }
+          resetVersion={
+            resetVersion
+          }
+          reducedMotion={
+            reducedMotion
+          }
+        />
       </Canvas>
-      {hoveredCountry && <div className="globe-country-label" role="status" aria-live="polite"><strong>{hoveredCountry.properties.name}</strong><span>{hoveredCountryCount} {hoveredCountryCount === 1 ? "changemaker" : "changemakers"}</span></div>}
+
+      {hoveredCountry && (
+        <div
+          className="globe-country-label"
+          role="status"
+          aria-live="polite"
+        >
+          <strong>
+            {
+              hoveredCountry
+                .properties
+                .name
+            }
+          </strong>
+
+          <span>
+            {
+              hoveredCountryCount
+            }{" "}
+            {hoveredCountryCount ===
+            1
+              ? "changemaker"
+              : "changemakers"}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
