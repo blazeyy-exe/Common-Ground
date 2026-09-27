@@ -1,175 +1,118 @@
 # Common Ground
 
-An interactive atlas of changemakers: the people, organizations, and
-relationships behind community-led work across the Global South.
+An interactive atlas of changemakers — the people, organizations, and relationships behind community-led work across the Global South.
 
-Open the app and you get a WebGL globe of every person in the collection.
-Filter by SDG, region, country, or category, open a profile, and follow
-the connections between people. The explorer is client-rendered, so moving
-between views never costs a round trip and any view can be shared as a URL.
+**502** changemakers · **181** countries · **121** relationships
 
-## What's in it
+A WebGL globe (with a flat-map fallback) lets you filter by SDG, region, country, or category, open profiles, and trace connections between people. An admin dashboard at `/admin` handles review and verification. The app is fully client-rendered, so every view is a shareable URL and navigation never costs a round trip.
 
-### Globe
-- 3D globe rendered with React Three Fiber, drawn from a bundled world topology
-  so there is no tile server or map API key to manage
-- one marker per changemaker, coloured by category, sized and highlighted on
-  selection
-- connection arcs between linked people, with the relationship type on hover
-- country hover states that report how many changemakers sit in that country
-- camera fly-to when a profile opens
-- automatic list-view fallback on devices without WebGL
+---
 
-### Explorer
-- keyword search across name, city, country, organization, category, and focus
-  areas
-- filters for SDG, category, region, and country, with the active set shown as
-  removable chips
-- four modes: Explore, Network, SDGs, and Places
-- share button that copies the current view, and a status bar that reports how
-  many people, countries, and SDGs are on screen
-- keyboard shortcuts: `/` search, `Esc` close, `R` reset, `G`/`L` globe or list,
-  `F` filters, `?` shortcut sheet
+## Features
 
-### Profiles
-- slide-in panel with organization, bio, focus areas, SDG badges, and the
-  person's connections
-- "Follow the ripple" walks from one changemaker to a connected one
+**Globe**
+Markers colored by category, animated connection arcs, country hover stats, camera fly-to on profile open, idle auto-rotate, and a custom atmosphere shader — all rendered from a bundled 105 KB world topology (no tile server or API key needed).
+
+**Map**
+The same topology as an SVG flat map — pan, zoom, hover — for lower-powered devices or a conventional cartographic view. Loads automatically under 700px width or when WebGL is unavailable.
+
+**Explorer**
+Keyword search, filters (SDG, category, region, country) with removable chips, an Explore/Network view toggle, and full state persisted in the URL. Keyboard shortcuts: `/` search · `Esc` close · `R` reset · `G` globe · `M` map · `F` filters · `?` help.
+
+**Profiles**
+Slide-in panel with bio, focus areas, SDG badges, and connections — including a "follow the ripple" walk to linked changemakers.
+
+**Admin dashboard** (`/admin`)
+Overview stats, a paginated/filterable changemaker table, a verification queue (pending / needs changes / verified), and full profile detail with history — all backed by an in-memory context (no backend yet).
+
+---
 
 ## Tech stack
 
 | Layer | Choice |
-| --- | --- |
-| UI | React 19, TypeScript, Lucide icons |
-| Build | Vite 8, Nitro (Cloudflare Workers bundle by default) |
-| App shell | TanStack Start + TanStack Router, TanStack Query provider |
-| Globe | React Three Fiber, drei, three, `d3-geo`, `topojson-client` |
-| Styling | Tailwind CSS v4 with a custom token layer in `src/styles.css` |
-| Primitives | shadcn-style `Button` (Radix Slot + class-variance-authority) |
+|---|---|
+| UI | React 19, TypeScript |
+| Build | Vite 8, Nitro (Cloudflare Workers by default) |
+| App shell | TanStack Start + Router + Query |
+| Globe | React Three Fiber, drei, three, d3-geo, topojson-client |
+| Styling | Tailwind CSS v4, custom tokens |
 
 ## Getting started
-
-Requires Bun 1.1+ (`npm` works too, the scripts are plain Vite commands).
 
 ```bash
 bun install
 bun run dev
 ```
 
-The dev server prints its URL (Vite's default port is 5173).
+Requires Bun 1.1+ (npm works too). Dev server runs on Vite's default port, 5173.
 
-## Scripts
+| Script | Purpose |
+|---|---|
+| `dev` | Dev server with HMR |
+| `build` | Production build → `.output/` |
+| `preview` | Serve the production build |
+| `typecheck` | `tsc --noEmit` |
+| `lint` | ESLint |
+| `format` | Prettier |
 
-| Script | What it does |
-| --- | --- |
-| `bun run dev` | Vite dev server with HMR |
-| `bun run build` | Client + SSR build, then the Nitro server bundle in `.output/` |
-| `bun run build:dev` | Same build with `mode=development` for readable stacks |
-| `bun run preview` | Serve the production build locally |
-| `bun run typecheck` | `tsc --noEmit` over the app and config |
-| `bun run lint` | ESLint (TypeScript, React hooks, Prettier) |
-| `bun run format` | Prettier write |
+There's no test suite — `typecheck`, `lint`, and `build` are the gate.
 
+## Routes
+
+| Path | Renders |
+|---|---|
+| `/` | The explorer (client-rendered) |
+| `/admin` | Dashboard overview |
+| `/admin/changemakers` | Changemaker table |
+| `/admin/changemakers/$id` | Single profile (admin) |
+| `/admin/verification` | Review queue |
 
 ## Project layout
 
 ```text
-public/                   favicon set + robots.txt
 src/
-  components/
-    GlobeExplorer.tsx     globe, markers, arcs, camera focus
-    ui/button.tsx         button primitive shared by every control
-  data/
-    changemakers.ts       the people in the atlas (typed records)
-    connections.ts        relationships between people
-    places.ts             region and country taxonomy for the filters
-    sdgs.ts               official SDG names and colours
-    world-atlas.json      compact world topology used to draw the globe
-  lib/
-    client-error-reporting.ts  error-boundary reporting hook
-    error-capture.ts           keeps the original Error when h3 swallows it
-    error-page.ts              last-resort HTML for a failed SSR render
-    utils.ts                   `cn()` class merge helper
-  routes/
-    __root.tsx            document shell, 404 and error views
-    index.tsx             the explorer (state, filters, panels, list)
-  router.tsx              router instance and query client
-  start.ts                request middleware (error + CSRF)
-  server.ts               SSR entry wrapper
-  styles.css              design tokens and explorer styles
+  admin/          admin UI, state, and derived metadata
+  components/     GlobeExplorer, MapExplorer, SdgIcon, ui/
+  data/           changemakers, connections, places, sdgs, world-atlas.json
+  lib/            error handling, utils
+  routes/         route tree (index, admin/*, __root)
+  styles.css      design tokens + explorer styles
 ```
 
 ## Data model
 
-Everything the explorer renders is derived from `src/data`, so adding a person
-never means touching a component.
+Everything renders from `src/data` — adding a person never touches a component.
 
-`changemakers.ts` holds the records: `id`, `name`, `city`, `country`, `region`,
-`latitude`, `longitude`, `category`, `sdgs`, `organization`, `bio`, and
-`focusAreas`. `categoryColor()` maps a category onto the marker palette so the
-list, the category dots, and the globe agree on colour.
+- **`changemakers.ts`** — core records (id, name, location, category, SDGs, bio, focus areas). Category colors are derived from the data itself.
+- **`connections.ts`** — relationships between two changemaker ids; an arc only draws once both ends resolve.
+- **`places.ts`** — region/country taxonomy (193 UN members + Palestine, Holy See, Taiwan).
+- **`sdgs.ts`** / **`sdgAnimations.ts`** — the 17 SDG names, colors, and Lottie animations.
 
-`connections.ts` links two changemakers with a `type` and a one-line
-`description`. Both ids must exist in `changemakers.ts`; the globe draws an arc
-only when both ends resolve.
+> Profiles are illustrative editorial entries, not verbatim biographies; connections are synthetic.
 
-The profiles are illustrative editorial entries rather than verbatim press
-biographies, and each coordinate pair is the approximate centre of the city the
-person works from.
+**Admin data** is derived, not stored: `adminMeta.ts` seeds a PRNG from each person's `id` to generate stable verification/status/reviewer fields, so numbers stay consistent across reloads without a backend.
 
 ## Design system
 
-`src/styles.css` is the only stylesheet. It has two layers:
-
-1. **Brand tokens** (`--surface-*`, `--text-*`, `--accent-*`) are the palette
-   every explorer rule reads from.
-2. **Semantic tokens** (`--background`, `--primary`, `--muted-foreground`, …)
-   alias the brand tokens and are registered under `@theme inline`, which is what
-   turns them into Tailwind utilities like `bg-primary` or `border-input`.
-
-The explorer is dark only, so there is no light/dark swap to maintain. Lightning
-CSS compiles the sheet, which keeps the `oklab()`/`oklch()` colour work and the
-vendor prefixing consistent across browsers.
-
-## How the globe is built
-
-`src/data/world-atlas.json` is a compact TopoJSON file, converted to GeoJSON at
-runtime with `topojson-client`. Land is painted once into an offscreen 2048×1024
-canvas using an equirectangular projection, then used as the sphere texture. The
-projection is rotated so its seam sits at 90°W and stays behind the camera's
-default framing.
-
-Markers are placed by projecting latitude/longitude onto the sphere in
-`globePoint()`. The palette is read from the CSS custom properties at mount, so
-the globe follows the theme instead of hard-coding colours in the WebGL layer.
-Country hit-testing uses `geoContains`, which keeps the hover counts correct
-without a second geometry pass.
+One stylesheet (`src/styles.css`), two layers: brand tokens (raw palette) and semantic tokens (`--background`, `--primary`, etc.) that Tailwind picks up via `@theme inline`. The admin dashboard reads the same tokens, so both surfaces stay visually in sync. Dark-mode only. Lightning CSS handles `oklch()`/`oklab()` and prefixing.
 
 ## Deployment
 
-`bun run build` writes a self-contained bundle to `.output/`:
+```bash
+bun run build
+npx nitro deploy --prebuilt
+```
 
-- `.output/public` — static client assets
-- `.output/server` — the Nitro server entry (Cloudflare Workers module by
-  default, with `wrangler.json` generated for you)
+Outputs a self-contained bundle to `.output/` (static client + Nitro server, Cloudflare Workers by default). Set `NITRO_PRESET` to target `node-server`, `vercel`, `netlify`, etc.
 
-Deploy with `npx nitro deploy --prebuilt` from `.output`, or point your platform
-at the build and set `NITRO_PRESET` (for example `node-server`, `vercel`,
-`netlify`) to target something other than Cloudflare Workers.
+## Known gaps
 
-## Quality notes
-
-- WebGL is optional: the globe falls back to a list view and tells the visitor
-  why, and the whole experience stays usable on a phone.
-- `prefers-reduced-motion` disables the panel animations and transitions.
-- Every control has a label, focus outlines are kept visible, and the globe,
-  panels, and modals carry ARIA roles.
-- Device pixel ratio is clamped on the canvas so high-density screens don't need
-  to render at full resolution.
+- All data is synthetic demo data; nothing persists.
+- No authentication — every `/admin` route is public.
+- Several admin sidebar links (Organizations, Reports & Flags, Analytics, etc.) are placeholders.
+- `getConnectionColor()` handles relationship types the current dataset doesn't use, so arcs all render in the default color.
+- No test suite — `typecheck` / `lint` / `build` are the safety net.
 
 ## Contributing
 
-Working notes for contributors and agents live in [AGENTS.md](./AGENTS.md). The
-short version: records go in `src/data`, presentation goes through the tokens in
-`src/styles.css` plus the class vocabulary in `src/routes/index.tsx`, and the
-production build must stay green.
+See [AGENTS.md](./AGENTS.md) for details. In short: data lives in `src/data`, styling goes through `src/styles.css`, and the build must stay green.
