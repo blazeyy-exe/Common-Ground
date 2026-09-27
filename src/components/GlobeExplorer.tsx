@@ -556,14 +556,21 @@ export const StaticGlobeEnvironment =
           />
         </Environment>
 
-        {/* Tuned down to texture, not subject. Against the near-black stage
-            backdrop the old `factor`/`count` turned 420 near-white points into
-            competing highlights right next to the globe. */}
+        {/* `factor` is the only brightness lever drei's Stars exposes — it scales
+            each star's `gl_PointSize`, and the star colour lightness is pinned at
+            0.9 HSL, so colour and opacity are not independently tunable. Size
+            randomized per star lands in [0.5 * factor, 1 * factor] and is then
+            attenuated by depth (`30.0 / -mvPosition.z`), so the useful range here
+            is narrow: below ~1.5 the field is a few stray pixels, and the old 2.2
+            still read as dust. 3.2 with a modest count gives soft round glows
+            rather than a wall of hard points, keeping the globe the brightest
+            single element. `fade` stays on so the larger points stay round
+            instead of rendering as opaque squares. */}
         <Stars
           radius={40}
           depth={35}
-          count={280}
-          factor={1.5}
+          count={340}
+          factor={3.2}
           saturation={0}
           fade
           speed={0.08}
