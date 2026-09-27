@@ -57,7 +57,19 @@ type GlobePalette = {
   ocean: string;
   land: string;
   outline: string;
-  blue: string;
+  /**
+   * Desaturated blue for marks drawn *on* the sphere: the land wash, the
+   * country hover fill and its stroke. Kept close in value to `ocean` so a
+   * highlighted country reads as a lift rather than a different material.
+   */
+  highlight: string;
+  /**
+   * The atmosphere: the limb rim and the outer haze shells, plus the light
+   * they imply. Deeper and bluer than `highlight`, and the same hue family as
+   * the stage backdrop, so the glow dissolves into the wall instead of
+   * stopping at a hard silhouette.
+   */
+  atmosphere: string;
   text: string;
 };
 
@@ -322,7 +334,8 @@ export function readGlobePalette(): GlobePalette {
       ocean: "#121715",
       land: "#1e2823",
       outline: "#405247",
-      blue: "#38bdf8",
+      highlight: "#5d7fa8",
+      atmosphere: "#3b6fa8",
       text: "#f0fdf4",
     };
   }
@@ -354,12 +367,19 @@ export function readGlobePalette(): GlobePalette {
         )
         .trim() || "#405247",
 
-    blue:
+    highlight:
       styles
         .getPropertyValue(
-          "--accent-blue",
+          "--globe-highlight",
         )
-        .trim() || "#38bdf8",
+        .trim() || "#5d7fa8",
+
+    atmosphere:
+      styles
+        .getPropertyValue(
+          "--globe-atmosphere",
+        )
+        .trim() || "#3b6fa8",
 
     text:
       styles
@@ -440,12 +460,14 @@ function createBaseEarthTexture(
   ctx.stroke();
 
   /*
-   * Subtle blue land wash.
+   * Subtle highlight wash over the land. Alpha is kept low and the colour is
+   * desaturated on purpose: this is a tint that should barely separate land
+   * from ocean at rest, not a second land colour.
    */
   ctx.beginPath();
   path(countryFeatures);
 
-  ctx.fillStyle = palette.blue;
+  ctx.fillStyle = palette.highlight;
   ctx.globalAlpha = 0.12;
   ctx.fill();
 
@@ -495,13 +517,13 @@ function createCountryHighlightTexture(
   ctx.beginPath();
   path(country);
 
-  ctx.fillStyle = palette.blue;
+  ctx.fillStyle = palette.highlight;
   ctx.globalAlpha = 0.72;
   ctx.fill();
 
   ctx.globalAlpha = 1;
 
-  ctx.strokeStyle = palette.blue;
+  ctx.strokeStyle = palette.highlight;
   ctx.lineWidth = 2.5;
   ctx.stroke();
 
@@ -514,6 +536,130 @@ function createCountryHighlightTexture(
   texture.needsUpdate = true;
 
   return texture;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Atmosphere shell                                                           */
+/* -------------------------------------------------------------------------- */
+
+/*
+ * The atmosphere used to be two `BackSide` spheres with a flat `opacity`, which
+ * cannot look like a glow. A constant alpha is at full strength right up to the
+ * shell's own silhouette, so the sphere's outline is drawn as a hard-edged disc
+ * — the "aura" read as a cut-out circle pasted behind the globe rather than as
+ * light spilling off it.
+ *
+ * This shader replaces that with a radial profile measured from the globe's
+ * centre in the fragment stage. `vRadial` runs 0 at the point of the shell
+ * facing the camera to 1 at the shell's limb (it is the perpendicular distance
+ * from the view axis, divided by the shell radius), so alpha can be shaped as a
+ * bump that is guaranteed to reach exactly 0 at the limb. Nothing is drawn at
+ * the silhouette at all, and because the value is a smooth function of radius
+ * rather than a per-vertex attribute, there is no faceting to give the edge
+ * away either.
+ *
+ * `uInner`/`uOuter` place the rise and the decay. `uIntensity` scales the whole
+ * thing, which is how the wide outer haze stays far fainter than the tight rim
+ * without needing a second, differently-tuned shader.
+ */
+const atmosphereVertexShader = /* glsl */ `
+  varying float vRadial;
+
+  void main() {
+    // View-space position of this vertex. The globe is centred on the origin
+    // and the camera looks at the origin, so the view axis passes through the
+    // view-space origin too, and the length of the xy part of the view-space
+    // position is exactly the perpendicular distance from that axis.
+    vec4 viewPosition = modelViewMatrix * vec4(position, 1.0);
+    vRadial = length(viewPosition.xy);
+
+    gl_Position = projectionMatrix * viewPosition;
+  }
+`;
+
+const atmosphereFragmentShader = /* glsl */ `
+  uniform vec3 uColor;
+  uniform float uRadius;
+  uniform float uInner;
+  uniform float uOuter;
+  uniform float uIntensity;
+
+  varying float vRadial;
+
+  void main() {
+    float t = clamp(vRadial / uRadius, 0.0, 1.0);
+
+    // Rise away from the centre, decay back to nothing before the limb. Both
+    // halves are smoothsteps, so the profile and its first derivative are
+    // continuous and the falloff shows no crease.
+    float rise = smoothstep(uInner, uOuter, t);
+    float decay = 1.0 - smoothstep(uOuter, 1.0, t);
+
+    // decay hits exactly 0 at t = 1, which is the whole point: alpha is zero
+    // on the shell's own silhouette, so there is no edge to see.
+    float alpha = rise * decay * uIntensity;
+
+    if (alpha <= 0.0) discard;
+
+    gl_FragColor = vec4(uColor, alpha);
+  }
+`;
+
+type AtmosphereShellProps = {
+  color: string;
+  radius: number;
+  inner: number;
+  outer: number;
+  intensity: number;
+};
+
+/**
+ * One soft-glow shell. Rendered back-face-only and additively, with depth
+ * writes off, so the shells layer over each other and over the stage without
+ * occluding the globe.
+ */
+function AtmosphereShell({
+  color,
+  radius,
+  inner,
+  outer,
+  intensity,
+}: AtmosphereShellProps) {
+  const material = useMemo(
+    () =>
+      new THREE.ShaderMaterial({
+        uniforms: {
+          uColor: { value: new THREE.Color(color) },
+          uRadius: { value: radius },
+          uInner: { value: inner },
+          uOuter: { value: outer },
+          uIntensity: { value: intensity },
+        },
+        vertexShader: atmosphereVertexShader,
+        fragmentShader: atmosphereFragmentShader,
+        transparent: true,
+        depthWrite: false,
+        side: THREE.BackSide,
+        blending: THREE.AdditiveBlending,
+      }),
+    [color, radius, inner, outer, intensity],
+  );
+
+  useEffect(() => {
+    return () => {
+      material.dispose();
+    };
+  }, [material]);
+
+  return (
+    <mesh>
+      <sphereGeometry args={[radius, 96, 64]} />
+      <primitive
+        object={material}
+        attach="material"
+      />
+    </mesh>
+  );
 }
 
 /* -------------------------------------------------------------------------- */
@@ -549,7 +695,7 @@ export const StaticGlobeEnvironment =
 
           <Lightformer
             intensity={0.8}
-            color={palette.blue}
+            color={palette.atmosphere}
             position={[-5, 1, -1]}
             rotation-y={Math.PI / 2}
             scale={[20, 1, 1]}

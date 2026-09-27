@@ -1087,9 +1087,9 @@ export function FlatMapExplorer({
                     hoveredCountry,
                 )?.d
               }
-              fill={palette.blue}
+              fill={palette.highlight}
               fillOpacity={0.32}
-              stroke={palette.blue}
+              stroke={palette.highlight}
               strokeWidth={1.6}
               vectorEffect="non-scaling-stroke"
               pointerEvents="none"

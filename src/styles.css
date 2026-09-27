@@ -27,13 +27,23 @@
      --surface-strong / --surface-muted, so darkening the wall behind the globe
      must not touch those or the sphere itself would darken with it. The stage
      wants to sit *below* both, so the globe stays the lightest thing in frame. */
-  --surface-void: #04050b;
-  --surface-void-deep: #010104;
+  --surface-void: #080d18;
+  --surface-void-deep: #050911;
   /* Channel triplet, not a hex: the stage bloom needs an alpha on the same
      colour, and `rgb(var(--x) / a)` is the one form a build-time CSS compiler
      can downlevel losslessly. A plain hex here would force `color-mix()`, whose
-     fallback silently drops the alpha and paints a solid blob. */
-  --stage-halo-rgb: 90 169 255;
+     fallback silently drops the alpha and paints a solid blob.
+     This is the atmosphere blue. It is deliberately the same hue family as
+     --surface-void: a bloom in a *related* hue reads as depth behind the globe,
+     whereas the old saturated cyan read as a coloured disc laid on top of the
+     wall, which is what gave the aura a visible rim. */
+  --stage-halo-rgb: 59 111 168;
+  /* The two globe-local blues. They are separate roles and separate tokens on
+     purpose — --accent-blue stays a bright UI chrome colour, while the sphere
+     itself wants a desaturated highlight that sits close to its own ocean and
+     a deeper atmosphere that sits close to the stage behind it. */
+  --globe-highlight: #5d7fa8;
+  --globe-atmosphere: #3b6fa8;
   --text-primary: #e8ecf6;
   --text-secondary: #97a1bd;
   --text-tertiary: #5d678c;
@@ -155,10 +165,16 @@ button { cursor: pointer; }
 .category-dot[class*="category-tone-"] { background: var(--category-color); }
 /* The stage is the darkest layer in the app so the globe is the one thing that
    reads as lit. Two stacked gradients: a near-black wash that is deepest
-   directly behind the sphere, and a very low-alpha accent bloom that only
-   survives in the ring *around* the globe, separating its silhouette from the
-   backdrop without brightening the area it sits on. */
-.main-stage { position: relative; flex: 1; min-width: 0; background: radial-gradient(ellipse 58% 54% at 48% 50%, rgb(var(--stage-halo-rgb) / 9%) 0%, rgb(var(--stage-halo-rgb) / 4%) 46%, rgb(var(--stage-halo-rgb) / 0%) 74%), radial-gradient(ellipse at 48% 52%, var(--surface-void) 0%, var(--surface-void-deep) 58%, var(--surface-base) 100%); overflow: hidden; }
+   directly behind the sphere, and an accent bloom in the atmosphere hue.
+
+   The bloom is spread over seven low-delta stops that reach 0% exactly at the
+   gradient's own 100% edge. The previous version peaked at 9% and bottomed out
+   at 74%, so it terminated well inside the stage and left a visible elliptical
+   rim — the "disc pasted on the wall" look. Fading all the way to the edge means
+   the falloff leaves the frame before it ever reaches zero, and no contour is
+   ever drawn. The per-stop deltas are small for the same reason: a steep
+   gradient bands visibly across a large flat area, a shallow one does not. */
+.main-stage { position: relative; flex: 1; min-width: 0; background: radial-gradient(ellipse 62% 58% at 48% 50%, rgb(var(--stage-halo-rgb) / 11%) 0%, rgb(var(--stage-halo-rgb) / 8.5%) 20%, rgb(var(--stage-halo-rgb) / 6%) 38%, rgb(var(--stage-halo-rgb) / 4%) 54%, rgb(var(--stage-halo-rgb) / 2.2%) 68%, rgb(var(--stage-halo-rgb) / 0.9%) 84%, rgb(var(--stage-halo-rgb) / 0%) 100%), radial-gradient(ellipse at 48% 52%, var(--surface-void) 0%, var(--surface-void-deep) 58%, var(--surface-base) 100%); overflow: hidden; }
 /* The grid is texture, not structure. It is masked away from the globe entirely
    and kept to the margins, so it can no longer draw a second set of lines
    across the sphere. */
