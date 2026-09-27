@@ -22,6 +22,18 @@
   --surface-muted: #1b2440;
   --surface-raised: oklab(0.223384 -0.000570506 -0.0442932 / 0.9);
   --surface-strong: #131a30;
+  /* Stage backdrop. Kept separate from the tokens above on purpose:
+     `readGlobePalette()` builds the globe's ocean and land from
+     --surface-strong / --surface-muted, so darkening the wall behind the globe
+     must not touch those or the sphere itself would darken with it. The stage
+     wants to sit *below* both, so the globe stays the lightest thing in frame. */
+  --surface-void: #04050b;
+  --surface-void-deep: #010104;
+  /* Channel triplet, not a hex: the stage bloom needs an alpha on the same
+     colour, and `rgb(var(--x) / a)` is the one form a build-time CSS compiler
+     can downlevel losslessly. A plain hex here would force `color-mix()`, whose
+     fallback silently drops the alpha and paints a solid blob. */
+  --stage-halo-rgb: 90 169 255;
   --text-primary: #e8ecf6;
   --text-secondary: #97a1bd;
   --text-tertiary: #5d678c;
@@ -141,8 +153,16 @@ button { cursor: pointer; }
 .category-tone-5 { --category-color: #a9d480; }
 .category-tone-6 { --category-color: #f19bac; }
 .category-dot[class*="category-tone-"] { background: var(--category-color); }
-.main-stage { position: relative; flex: 1; min-width: 0; background: radial-gradient(ellipse at 48% 52%, var(--surface-muted) 0%, var(--surface-strong) 55%, var(--surface-base) 100%); overflow: hidden; }
-.main-stage::before { content: ""; position: absolute; inset: 0; opacity: .16; pointer-events: none; background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px); background-size: 90px 90px; mask-image: linear-gradient(90deg, transparent 5%, black 55%, transparent 100%); }
+/* The stage is the darkest layer in the app so the globe is the one thing that
+   reads as lit. Two stacked gradients: a near-black wash that is deepest
+   directly behind the sphere, and a very low-alpha accent bloom that only
+   survives in the ring *around* the globe, separating its silhouette from the
+   backdrop without brightening the area it sits on. */
+.main-stage { position: relative; flex: 1; min-width: 0; background: radial-gradient(ellipse 58% 54% at 48% 50%, rgb(var(--stage-halo-rgb) / 9%) 0%, rgb(var(--stage-halo-rgb) / 4%) 46%, rgb(var(--stage-halo-rgb) / 0%) 74%), radial-gradient(ellipse at 48% 52%, var(--surface-void) 0%, var(--surface-void-deep) 58%, var(--surface-base) 100%); overflow: hidden; }
+/* The grid is texture, not structure. It is masked away from the globe entirely
+   and kept to the margins, so it can no longer draw a second set of lines
+   across the sphere. */
+.main-stage::before { content: ""; position: absolute; inset: 0; opacity: .07; pointer-events: none; background-image: linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px); background-size: 90px 90px; mask-image: radial-gradient(ellipse 78% 74% at 48% 52%, transparent 0%, transparent 46%, black 100%); -webkit-mask-image: radial-gradient(ellipse 78% 74% at 48% 52%, transparent 0%, transparent 46%, black 100%); }
 .top-controls { position: absolute; z-index: 3; top: 28px; left: 35px; right: 35px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .toolbar-cluster { display: flex; align-items: center; gap: 4px; padding: 5px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); backdrop-filter: blur(12px); }
 .mode-control { display: inline-flex; align-items: center; gap: 2px; padding: 5px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); backdrop-filter: blur(12px); }
@@ -169,19 +189,9 @@ button { cursor: pointer; }
 .status-title { font-weight: 650; color: var(--foreground); }
 .status-stats { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .status-coords { flex: none; font-variant-numeric: tabular-nums; color: var(--dim); }
-.list-stage { position: absolute; inset: 130px 40px 40px; overflow: auto; }
-.list-summary { display: flex; justify-content: space-between; border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 20px; color: var(--muted-foreground); font-size: 11px; }
-.list-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(245px, 1fr)); gap: 12px; }
-.list-person { height: 245px; border: 1px solid var(--border); background: var(--surface-strong); border-radius: 2px; display: flex; align-items: flex-start; text-align: left; justify-content: space-between; padding: 22px; white-space: normal; color: var(--foreground); }
-.list-person:hover { background: var(--surface-muted); border-color: var(--primary); }
-.list-index { font-size: 10px; color: var(--dim); }
-.list-person-main { display: flex; flex-direction: column; align-self: flex-end; align-items: flex-start; width: 100%; margin-left: -20px; min-width: 0; }
-.list-person-category { font-size: 10px; color: var(--primary); display: flex; align-items: center; gap: 7px; margin-bottom: 12px; }
-.list-person strong { font-size: 24px; font-weight: 550; line-height: 1.1; }
-.list-person small { font-size: 11px; color: var(--muted-foreground); margin-top: 10px; font-weight: 400; }
-.list-person-location { margin-top: 22px; display: flex; gap: 6px; align-items: center; color: var(--dim); font-size: 10px; }
-.list-arrow { color: var(--primary); flex: none; }
-.list-empty { text-align: center; color: var(--muted-foreground); padding: 80px 20px; }
+.flatmap-canvas svg { touch-action: none; cursor: grab; }
+.flatmap-canvas svg:active { cursor: grabbing; }
+.flatmap-canvas path { cursor: pointer; }
 .profile-panel { position: absolute; z-index: 4; right: 15px; top: 15px; bottom: 15px; width: min(365px, calc(100% - 390px)); background: var(--surface-raised); border: 1px solid var(--border); box-shadow: -20px 20px 75px rgb(0 0 0 / 66%); backdrop-filter: blur(26px); animation: panel-in .3s ease-out; }
 .profile-scroll { height: 100%; overflow-y: auto; padding: 24px 26px 30px; scrollbar-color: var(--border) transparent; }
 .profile-top { display: flex; align-items: center; justify-content: space-between; }
@@ -247,11 +257,6 @@ button { cursor: pointer; }
   .main-stage { min-height: 0; flex: 1; }
   .view-toggle button { padding: 0 8px; font-size: 10px; }
   .stage-status-bar { padding: 12px 20px; font-size: 10px; }
-  .list-stage { inset: 101px 20px 23px; }
-  .list-grid { grid-template-columns: 1fr; gap: 10px; }
-  .list-person { height: 160px; padding: 18px; }
-  .list-person strong { font-size: 21px; }
-  .list-person-location { margin-top: 11px; }
   .profile-panel { position: fixed; width: 100%; left: 0; right: 0; top: auto; bottom: 0; height: min(76dvh, 680px); border-left: 0; border-right: 0; border-bottom: 0; border-radius: 14px 14px 0 0; box-shadow: 0 -15px 50px rgb(0 0 0 / 87%); animation: sheet-in .3s ease-out; }
   .profile-panel::before { content: ""; display: block; position: absolute; width: 34px; height: 3px; border-radius: 3px; background: var(--dim); top: 9px; left: calc(50% - 17px); }
   .profile-scroll { padding: 25px 22px 40px; }
@@ -279,7 +284,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .connection-modal h2 { font-size: 22px; }
 .connection-modal p { margin-bottom: 14px; }
 .connection-modal .modal-people { margin: 16px 0; padding: 13px 0; flex-wrap: wrap; }
-.main-stage--list .list-stage { top: 158px; }
 
 @media (max-width: 800px) {
   .top-controls { left: 20px; right: 20px; }
@@ -291,7 +295,6 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .mode-pill { flex: 1; padding: 8px 5px; font-size: 11px; text-align: center; }
   .stage-status-bar { padding: 12px 20px; gap: 12px; flex-wrap: wrap; }
   .status-stats { order: 3; flex-basis: 100%; white-space: normal; }
-  .main-stage--list .list-stage { top: 149px; }
   .ripple-status { bottom: 54px; font-size: 10px; }
   .modal-backdrop:not(.help-backdrop) { inset: auto 10px 49px; padding: 0; }
   .connection-modal { width: 100%; max-height: 58dvh; overflow-y: auto; padding: 17px; }

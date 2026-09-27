@@ -4,7 +4,7 @@ An interactive atlas of changemakers: the people, organizations, and
 relationships behind community-led work across the Global South.
 
 Open the app and you get a WebGL globe of every person in the collection.
-Narrow it down by SDG, region, country, or category, open a profile, and follow
+Filter by SDG, region, country, or category, open a profile, and follow
 the connections between people. The explorer is client-rendered, so moving
 between views never costs a round trip and any view can be shared as a URL.
 

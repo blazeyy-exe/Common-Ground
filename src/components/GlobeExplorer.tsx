@@ -556,11 +556,14 @@ export const StaticGlobeEnvironment =
           />
         </Environment>
 
+        {/* Tuned down to texture, not subject. Against the near-black stage
+            backdrop the old `factor`/`count` turned 420 near-white points into
+            competing highlights right next to the globe. */}
         <Stars
           radius={40}
           depth={35}
-          count={420}
-          factor={2.2}
+          count={280}
+          factor={1.5}
           saturation={0}
           fade
           speed={0.08}
@@ -1890,6 +1893,7 @@ export function GlobeExplorer({
   focusVersion,
   resetVersion,
   networkMode = false,
+  paused = false,
   onSelect,
   onConnection,
   onFallback,
@@ -1900,6 +1904,21 @@ export function GlobeExplorer({
   focusVersion: number;
   resetVersion: number;
   networkMode?: boolean;
+  /**
+   * Stops the continuous WebGL render loop without tearing the canvas down.
+   * Used while the router is committing a navigation away from `/`: the globe
+   * would otherwise keep issuing `useFrame` callbacks and `gl.render` calls
+   * that starve the main thread exactly when React needs it to unmount this
+   * scene and paint the next route.
+   *
+   * R3F re-applies `frameloop` whenever the prop changes, and its global
+   * `requestAnimationFrame` loop reschedules itself unconditionally, so
+   * flipping back to `"always"` resumes on the very next frame. The one visible
+   * side effect is that `setFrameloop` resets the three.js clock, so the marker
+   * pulses and travelling-arc particles jump back to their start once the
+   * globe resumes — acceptable for a pause that only spans a navigation.
+   */
+  paused?: boolean;
   onSelect: (id: string) => void;
   onConnection: (
     connection: Connection,
@@ -2168,6 +2187,7 @@ export function GlobeExplorer({
           fov: 42,
         }}
         dpr={[1, 1.35]}
+        frameloop={paused ? "never" : "always"}
         gl={{
           antialias: true,
           alpha: true,

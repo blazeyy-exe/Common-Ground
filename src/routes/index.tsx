@@ -1,12 +1,13 @@
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useRouterState } from "@tanstack/react-router";
 import { useEffect, Fragment, useMemo, useRef, useState, useDeferredValue, useCallback } from "react";
-import { ArrowRight, ArrowUpRight, ChevronDown, CircleHelp, Compass, Globe2, Layers3, List, MapPin, Network, Search, SlidersHorizontal, Sparkles, X } from "lucide-react";
+import { ArrowRight, ArrowUpRight, ChevronDown, CircleHelp, Compass, Globe2, Layers3, MapPin, Network, Search, SlidersHorizontal, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { categoryTone, changemakers, type Changemaker } from "@/data/changemakers";
 import { connections, type Connection } from "@/data/connections";
 import { countriesByRegion, countryNames, regionNames } from "@/data/places";
 import { sdgs } from "@/data/sdgs";
 import { GlobeExplorer } from "@/components/GlobeExplorer";
+import { FlatMapExplorer } from "@/components/MapExplorer";
 
 export const Route = createFileRoute("/")({
   ssr: false,
@@ -97,14 +98,35 @@ function ExplorerPage() {
   });
   const [focusVersion, setFocusVersion] = useState(0);
   const [resetVersion, setResetVersion] = useState(0);
-  const [view, setView] = useState<"globe" | "list">("globe");
+  const [view, setView] = useState<"globe" | "map">("globe");
   const [detail, setDetail] = useState<Connection | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
   const [rippleMessage, setRippleMessage] = useState("");
   const searchInput = useRef<HTMLInputElement>(null);
   const rippleTimer = useRef<number | undefined>(undefined);
-  useEffect(() => { if (window.matchMedia("(max-width: 700px)").matches) setView("list"); }, []);
+  // The globe renders every animation frame. Left running, those WebGL frames
+  // compete with React for the main thread and the click on "Admin" looks like
+  // it hangs: the router commits the new route, but that commit has to share
+  // the thread with `useFrame` callbacks and a full-scene `gl.render`. Pausing
+  // the loop hands the thread back, so the dashboard appears on the next paint.
+  //
+  // `navigating` is the source of truth; `adminLinkPressed` only front-runs it.
+  // The router flips `status` to "pending" from inside the click handler, and
+  // React can batch that with the navigation commit into a single render — in
+  // which case the pause never gets a chance to land before the expensive
+  // commit. `pointerdown` is a separate, discrete event, so the pause is already
+  // applied by the time `click` (and therefore the navigation) happens.
+  const navigating = useRouterState({ select: (state) => state.status === "pending" });
+  const [adminLinkPressed, setAdminLinkPressed] = useState(false);
+  const pressAdminLink = useCallback(() => setAdminLinkPressed(true), []);
+  const releaseAdminLink = useCallback(() => setAdminLinkPressed(false), []);
+  // Keyboard activation never fires pointer events, so Enter/Space pause here too.
+  const armAdminLink = useCallback((event: { key: string }) => {
+    if (event.key === "Enter" || event.key === " ") setAdminLinkPressed(true);
+  }, []);
+  const globePaused = adminLinkPressed || navigating;
+  useEffect(() => { if (window.matchMedia("(max-width: 700px)").matches) setView("map"); }, []);
   const results = useMemo(() => {
     const query = search.trim().toLowerCase();
     return changemakers.filter((person) => {
@@ -136,7 +158,6 @@ function ExplorerPage() {
     setDetail(null);
     setSelectedId(id);
     setFocusVersion((version) => version + 1);
-    setView("globe");
   };
   const closeProfile = () => {
     setSelectedId(null);
@@ -150,7 +171,6 @@ function ExplorerPage() {
     setDetail(null);
     clearFilters();
     setMode("explore");
-    setView("globe");
     setFocusVersion((version) => version + 1);
     setResetVersion((version) => version + 1);
   };
@@ -206,7 +226,7 @@ function ExplorerPage() {
         searchInput.current?.focus();
       } else if (!typing && event.key.toLowerCase() === "r") resetView();
       else if (!typing && event.key.toLowerCase() === "g") setView("globe");
-      else if (!typing && event.key.toLowerCase() === "l") setView("list");
+      else if (!typing && event.key.toLowerCase() === "m") setView("map");
       else if (!typing && event.key.toLowerCase() === "f") setShowFilters(true);
       else if (!typing && event.key === "?") setShowHelp((visible) => !visible);
     };
@@ -230,14 +250,14 @@ function ExplorerPage() {
         <div className="sidebar-tools"><label className="search-field"><input ref={searchInput} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search changemakers" aria-label="Search changemakers" /><Search size={16} className="search-icon" />{search && <Button variant="ghost" size="icon" className="search-clear" onClick={() => setSearch("")} aria-label="Clear search"><X size={14} /></Button>}</label>
           <button type="button" className="mobile-filter-toggle" aria-expanded={showFilters} aria-controls="explorer-filters" onClick={() => setShowFilters((visible) => !visible)}>Filters<ChevronDown size={14} className={showFilters ? "rotate-icon" : ""} /></button>
         </div>
-        <div className="filters-panel" id="explorer-filters"><div className="filters-heading"><span>Narrow it down</span>{activeFilterCount > 0 && <button type="button" className="clear-button" onClick={clearFilters}>Clear all</button>}</div><div className={`filter-grid ${showFilters ? "filter-grid--open" : ""}`}><SelectFilter label="Category" value={filters.category} onChange={setFilter("category")} choices={options.category.map((value) => ({ value, label: value }))} /><SelectFilter label="Region" value={filters.region} onChange={setFilter("region")} choices={options.region.map((value) => ({ value, label: value }))} /><SelectFilter label="SDG" value={filters.sdg} onChange={setFilter("sdg")} choices={options.sdg.map((number) => ({ value: String(number), label: `${number} · ${sdgByNumber.get(number)?.name ?? "SDG"}` }))} /><SelectFilter label="Country" value={filters.country} onChange={setFilter("country")} choices={countryChoices} /></div>{activeFilterCount > 0 && <div className="active-tag-row">{Object.entries(filters).filter(([, value]) => value).map(([key, value]) => <button type="button" className="active-tag" key={key} onClick={() => setFilter(key as keyof typeof filters)("")}><span>{key === "sdg" ? `SDG ${value}` : value}</span><X size={12} /></button>)}</div>}</div>
+        <div className="filters-panel" id="explorer-filters"><div className="filters-heading"><span>Filter by</span>{activeFilterCount > 0 && <button type="button" className="clear-button" onClick={clearFilters}>Clear all</button>}</div><div className={`filter-grid ${showFilters ? "filter-grid--open" : ""}`}><SelectFilter label="Category" value={filters.category} onChange={setFilter("category")} choices={options.category.map((value) => ({ value, label: value }))} /><SelectFilter label="Region" value={filters.region} onChange={setFilter("region")} choices={options.region.map((value) => ({ value, label: value }))} /><SelectFilter label="SDG" value={filters.sdg} onChange={setFilter("sdg")} choices={options.sdg.map((number) => ({ value: String(number), label: `${number} · ${sdgByNumber.get(number)?.name ?? "SDG"}` }))} /><SelectFilter label="Country" value={filters.country} onChange={setFilter("country")} choices={countryChoices} /></div>{activeFilterCount > 0 && <div className="active-tag-row">{Object.entries(filters).filter(([, value]) => value).map(([key, value]) => <button type="button" className="active-tag" key={key} onClick={() => setFilter(key as keyof typeof filters)("")}><span>{key === "sdg" ? `SDG ${value}` : value}</span><X size={12} /></button>)}</div>}</div>
       </div></aside>
-      <section className={`main-stage ${view === "list" ? "main-stage--list" : ""}`} aria-label="Changemakers explorer">
-        <div className="top-controls"><div className="mode-control" role="group" aria-label="Explorer mode">{(["explore", "network"] as ExplorerMode[]).map((item) => <button key={item} type="button" className={mode === item ? "mode-pill active" : "mode-pill"} aria-pressed={mode === item} onClick={() => setMode(item)}>{item[0]!.toUpperCase() + item.slice(1)}</button>)}</div><div className="toolbar-cluster"><div className="view-toggle" role="group" aria-label="View mode"><button type="button" className={view === "globe" ? "view-pill active" : "view-pill"} onClick={() => setView("globe")} aria-pressed={view === "globe"}>Globe</button><button type="button" className={view === "list" ? "view-pill active" : "view-pill"} onClick={() => setView("list")} aria-pressed={view === "list"}>List</button></div><div className="toolbar-actions"><Link to="/admin" className="admin-profile" title="Go to admin dashboard" aria-label="Go to admin dashboard"><span className="admin-profile-avatar" aria-hidden="true">A</span><span className="admin-profile-name">Admin</span></Link></div></div></div>
+      <section className="main-stage" aria-label="Changemakers explorer">
+        <div className="top-controls"><div className="mode-control" role="group" aria-label="Explorer mode">{(["explore", "network"] as ExplorerMode[]).map((item) => <button key={item} type="button" className={mode === item ? "mode-pill active" : "mode-pill"} aria-pressed={mode === item} onClick={() => setMode(item)}>{item[0]!.toUpperCase() + item.slice(1)}</button>)}</div><div className="toolbar-cluster"><div className="view-toggle" role="group" aria-label="View mode"><button type="button" className={view === "globe" ? "view-pill active" : "view-pill"} onClick={() => setView("globe")} aria-pressed={view === "globe"}>Globe</button><button type="button" className={view === "map" ? "view-pill active" : "view-pill"} onClick={() => setView("map")} aria-pressed={view === "map"}>Map</button></div><div className="toolbar-actions"><Link to="/admin" className="admin-profile" title="Go to admin dashboard" aria-label="Go to admin dashboard" onPointerDown={pressAdminLink} onPointerUp={releaseAdminLink} onPointerLeave={releaseAdminLink} onPointerCancel={releaseAdminLink} onKeyDown={armAdminLink}><span className="admin-profile-avatar" aria-hidden="true">A</span><span className="admin-profile-name">Admin</span></Link></div></div></div>
         {view === "globe" && (
           <>
             <div className="globe-background">
-              <GlobeExplorer people={results} connections={connections} selectedId={selectedId} focusVersion={focusVersion} resetVersion={resetVersion} networkMode={mode === "network"} onSelect={selectPerson} onConnection={setDetail} onFallback={() => setView("list")} />
+              <GlobeExplorer people={results} connections={connections} selectedId={selectedId} focusVersion={focusVersion} resetVersion={resetVersion} networkMode={mode === "network"} paused={globePaused} onSelect={selectPerson} onConnection={setDetail} onFallback={() => setView("map")} />
             </div>
             <div className="stage-status-bar">
               <span className="status-hint"><Compass size={14} />Drag to rotate · scroll to zoom</span>
@@ -250,34 +270,26 @@ function ExplorerPage() {
             {rippleMessage && <div className="ripple-status" role="status"><Sparkles size={14} />Following the ripple <span>{rippleMessage}</span></div>}
           </>
         )}
-        {view === "list" && (
-          <div className="list-stage">
-            <div className="list-summary">
-              <span>{results.length} {results.length === 1 ? "changemaker" : "changemakers"}</span>
-              <span>Across {visibleCountries.length} {visibleCountries.length === 1 ? "country" : "countries"}</span>
+        {view === "map" && (
+          <>
+            <div className="globe-background">
+              <FlatMapExplorer people={results} connections={connections} selectedId={selectedId} focusVersion={focusVersion} resetVersion={resetVersion} networkMode={mode === "network"} onSelect={selectPerson} onConnection={setDetail} onFallback={() => setView("globe")} />
             </div>
-            {results.length ? (
-              <div className="list-grid">
-                {results.map((person, index) => (
-                  <Button variant="ghost" className="list-person" key={person.id} onClick={() => selectPerson(person.id)}>
-                    <span className="list-index">{String(index + 1).padStart(2, "0")}</span>
-                    <span className="list-person-main">
-                      <span className="list-person-category"><CategoryDot category={person.category} />{person.category}</span>
-                      <strong>{person.name}</strong>
-                      <small>{person.organization}</small>
-                      <span className="list-person-location"><MapPin size={13} />{person.city}, {person.country}</span>
-                    </span>
-                    <ArrowUpRight className="list-arrow" size={19} />
-                  </Button>
-                ))}
-              </div>
-            ) : <div className="list-empty">No changemakers match your search.</div>}
-          </div>
+            <div className="stage-status-bar">
+              <span className="status-hint"><Compass size={14} />Drag to pan · scroll to zoom</span>
+              <span className="status-title">{statTitle}</span>
+              <span className="status-stats">
+                {selected ? <>{selected.sdgs.length} SDGs · {relatedConnections.length} connection{relatedConnections.length !== 1 ? "s" : ""} · {selected.country}</> : <>{results.length} people · {visibleCountries.length} countries · {new Set(results.flatMap((person) => person.sdgs)).size} SDGs · {relatedConnections.length} connections</>}
+              </span>
+              {focusPoint && <span className="status-coords" title={focusPoint.label}>{formatCoordinate(focusPoint.latitude, "N", "S")}&nbsp;&nbsp;{formatCoordinate(focusPoint.longitude, "E", "W")}</span>}
+            </div>
+            {rippleMessage && <div className="ripple-status" role="status"><Sparkles size={14} />Following the ripple <span>{rippleMessage}</span></div>}
+          </>
         )}
       </section>
       {selected && <ProfilePanel person={selected} onClose={closeProfile} onSelect={selectPerson} onConnection={setDetail} onFollowRipple={followRipple} />}
     </main>
     {detail && <div className="modal-backdrop" onMouseDown={() => setDetail(null)}><div className="connection-modal" role="dialog" aria-modal="true" aria-label="Connection details" onMouseDown={(event) => event.stopPropagation()}><div className="modal-top"><span className="eyebrow">THE CONNECTION / {detail.id.toUpperCase()}</span><Button variant="ghost" size="icon" className="icon-button" onClick={() => setDetail(null)} aria-label="Close connection details"><X size={19} /></Button></div><div className="modal-icon"><Network size={26} /></div><span className="section-label">RELATIONSHIP TYPE</span><h2>{detail.type}</h2><p>{detail.description}</p><div className="modal-people">{[detail.sourceId, detail.targetId].map((id, index) => { const person = changemakers.find((p) => p.id === id); if (!person) return null; return <div key={id}>{index > 0 && <span className="modal-link">↔</span>}<span>{person.name}<small>{person.city}, {person.country}</small></span></div>; })}</div><Button variant="secondary" className="modal-action" onClick={() => selectPerson(detail.targetId)}>Explore {changemakers.find((person) => person.id === detail.targetId)?.name ?? "changemaker"} <ArrowRight size={16} /></Button></div></div>}
-    {showHelp && <div className="modal-backdrop help-backdrop" onMouseDown={() => setShowHelp(false)}><section className="shortcuts-panel" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" onMouseDown={(event) => event.stopPropagation()}><div className="modal-top"><span className="eyebrow">QUICK KEYS</span><Button variant="ghost" size="icon" className="icon-button" onClick={() => setShowHelp(false)} aria-label="Close keyboard shortcuts"><X size={18} /></Button></div><h2>Move through the map</h2><div><span>Search</span><kbd>/</kbd><span>Close panel</span><kbd>Esc</kbd><span>Reset view</span><kbd>R</kbd><span>Globe / List</span><kbd>G / L</kbd><span>Open filters</span><kbd>F</kbd></div></section></div>}
+    {showHelp && <div className="modal-backdrop help-backdrop" onMouseDown={() => setShowHelp(false)}><section className="shortcuts-panel" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" onMouseDown={(event) => event.stopPropagation()}><div className="modal-top"><span className="eyebrow">QUICK KEYS</span><Button variant="ghost" size="icon" className="icon-button" onClick={() => setShowHelp(false)} aria-label="Close keyboard shortcuts"><X size={18} /></Button></div><h2>Move through the map</h2><div><span>Search</span><kbd>/</kbd><span>Close panel</span><kbd>Esc</kbd><span>Reset view</span><kbd>R</kbd><span>Globe / Map</span><kbd>G / M</kbd><span>Open filters</span><kbd>F</kbd></div></section></div>}
   </div>;
 }
