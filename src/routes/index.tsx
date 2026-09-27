@@ -1,6 +1,6 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, Fragment, useMemo, useRef, useState, useDeferredValue, useCallback } from "react";
-import { ArrowRight, ArrowUpRight, ChevronDown, CircleHelp, Compass, Globe2, Layers3, List, MapPin, Network, RotateCcw, Search, Share2, SlidersHorizontal, Sparkles, X } from "lucide-react";
+import { ArrowRight, ArrowUpRight, ChevronDown, CircleHelp, Compass, Globe2, Layers3, List, MapPin, Network, Search, SlidersHorizontal, Sparkles, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { categoryTone, changemakers, type Changemaker } from "@/data/changemakers";
 import { connections, type Connection } from "@/data/connections";
@@ -33,7 +33,7 @@ const countryChoices: { value: string; label: string; group?: string }[] = [
   ...options.country.filter((country) => !countryNames.includes(country)).map((value) => ({ value, label: value })),
 ];
 const sdgByNumber = new Map(sdgs.map((sdg) => [sdg.number, sdg]));
-type ExplorerMode = "explore" | "network" | "sdgs" | "places";
+type ExplorerMode = "explore" | "network";
 
 /** 12.3456 -> `12°21′ N`, so the status bar reads like a surveyor's note. */
 function formatCoordinate(value: number, positive: string, negative: string) {
@@ -93,7 +93,7 @@ function ExplorerPage() {
   });
   const [mode, setMode] = useState<ExplorerMode>(() => {
     const value = new URLSearchParams(window.location.search).get("mode");
-    return value === "network" || value === "sdgs" || value === "places" ? value : "explore";
+    return value === "network" ? value : "explore";
   });
   const [focusVersion, setFocusVersion] = useState(0);
   const [resetVersion, setResetVersion] = useState(0);
@@ -101,7 +101,6 @@ function ExplorerPage() {
   const [detail, setDetail] = useState<Connection | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [showHelp, setShowHelp] = useState(false);
-  const [shareMessage, setShareMessage] = useState("");
   const [rippleMessage, setRippleMessage] = useState("");
   const searchInput = useRef<HTMLInputElement>(null);
   const rippleTimer = useRef<number | undefined>(undefined);
@@ -170,15 +169,6 @@ function ExplorerPage() {
     setRippleMessage(`${connection.type} · ${nextPerson.name}, ${nextPerson.country}`);
     rippleTimer.current = window.setTimeout(() => selectPerson(nextId), 1050);
   };
-  const shareView = async () => {
-    try {
-      await navigator.clipboard.writeText(window.location.href);
-      setShareMessage("Link copied");
-    } catch {
-      setShareMessage("Unable to copy link");
-    }
-    window.setTimeout(() => setShareMessage(""), 2200);
-  };
   useEffect(() => {
     const params = new URLSearchParams();
     if (selectedId) params.set("person", selectedId);
@@ -197,7 +187,7 @@ function ExplorerPage() {
       const personId = params.get("person");
       const urlMode = params.get("mode");
       setSelectedId(changemakers.some((person) => person.id === personId) ? personId : null);
-      setMode(urlMode === "network" || urlMode === "sdgs" || urlMode === "places" ? urlMode : "explore");
+      setMode(urlMode === "network" ? urlMode : "explore");
       setFilters({ sdg: params.get("sdg") ?? "", category: params.get("category") ?? "", region: params.get("region") ?? "", country: params.get("country") ?? "" });
       setSearch(params.get("q") ?? "");
       setFocusVersion((version) => version + 1);
@@ -243,7 +233,7 @@ function ExplorerPage() {
         <div className="filters-panel" id="explorer-filters"><div className="filters-heading"><span>Narrow it down</span>{activeFilterCount > 0 && <button type="button" className="clear-button" onClick={clearFilters}>Clear all</button>}</div><div className={`filter-grid ${showFilters ? "filter-grid--open" : ""}`}><SelectFilter label="Category" value={filters.category} onChange={setFilter("category")} choices={options.category.map((value) => ({ value, label: value }))} /><SelectFilter label="Region" value={filters.region} onChange={setFilter("region")} choices={options.region.map((value) => ({ value, label: value }))} /><SelectFilter label="SDG" value={filters.sdg} onChange={setFilter("sdg")} choices={options.sdg.map((number) => ({ value: String(number), label: `${number} · ${sdgByNumber.get(number)?.name ?? "SDG"}` }))} /><SelectFilter label="Country" value={filters.country} onChange={setFilter("country")} choices={countryChoices} /></div>{activeFilterCount > 0 && <div className="active-tag-row">{Object.entries(filters).filter(([, value]) => value).map(([key, value]) => <button type="button" className="active-tag" key={key} onClick={() => setFilter(key as keyof typeof filters)("")}><span>{key === "sdg" ? `SDG ${value}` : value}</span><X size={12} /></button>)}</div>}</div>
       </div></aside>
       <section className={`main-stage ${view === "list" ? "main-stage--list" : ""}`} aria-label="Changemakers explorer">
-        <div className="top-controls"><div className="mode-control" role="group" aria-label="Explorer mode">{(["explore", "network", "sdgs", "places"] as ExplorerMode[]).map((item) => <button key={item} type="button" className={mode === item ? "mode-pill active" : "mode-pill"} aria-pressed={mode === item} onClick={() => setMode(item)}>{item === "sdgs" ? "SDGs" : item[0]!.toUpperCase() + item.slice(1)}</button>)}</div><div className="toolbar-cluster"><div className="view-toggle" role="group" aria-label="View mode"><button type="button" className={view === "globe" ? "view-pill active" : "view-pill"} onClick={() => setView("globe")} aria-pressed={view === "globe"}>Globe</button><button type="button" className={view === "list" ? "view-pill active" : "view-pill"} onClick={() => setView("list")} aria-pressed={view === "list"}>List</button></div><div className="toolbar-actions"><button type="button" className="icon-button" title="Share view" aria-label="Share view" onClick={shareView}><Share2 size={15} /></button><button type="button" className="icon-button" title="Reset view" aria-label="Reset view" onClick={resetView}><RotateCcw size={15} /></button></div></div></div>
+        <div className="top-controls"><div className="mode-control" role="group" aria-label="Explorer mode">{(["explore", "network"] as ExplorerMode[]).map((item) => <button key={item} type="button" className={mode === item ? "mode-pill active" : "mode-pill"} aria-pressed={mode === item} onClick={() => setMode(item)}>{item[0]!.toUpperCase() + item.slice(1)}</button>)}</div><div className="toolbar-cluster"><div className="view-toggle" role="group" aria-label="View mode"><button type="button" className={view === "globe" ? "view-pill active" : "view-pill"} onClick={() => setView("globe")} aria-pressed={view === "globe"}>Globe</button><button type="button" className={view === "list" ? "view-pill active" : "view-pill"} onClick={() => setView("list")} aria-pressed={view === "list"}>List</button></div><div className="toolbar-actions"><Link to="/admin" className="admin-profile" title="Go to admin dashboard" aria-label="Go to admin dashboard"><span className="admin-profile-avatar" aria-hidden="true">A</span><span className="admin-profile-name">Admin</span></Link></div></div></div>
         {view === "globe" && (
           <>
             <div className="globe-background">
@@ -287,7 +277,6 @@ function ExplorerPage() {
       </section>
       {selected && <ProfilePanel person={selected} onClose={closeProfile} onSelect={selectPerson} onConnection={setDetail} onFollowRipple={followRipple} />}
     </main>
-    {shareMessage && <div className="toast-message" role="status">{shareMessage}</div>}
     {detail && <div className="modal-backdrop" onMouseDown={() => setDetail(null)}><div className="connection-modal" role="dialog" aria-modal="true" aria-label="Connection details" onMouseDown={(event) => event.stopPropagation()}><div className="modal-top"><span className="eyebrow">THE CONNECTION / {detail.id.toUpperCase()}</span><Button variant="ghost" size="icon" className="icon-button" onClick={() => setDetail(null)} aria-label="Close connection details"><X size={19} /></Button></div><div className="modal-icon"><Network size={26} /></div><span className="section-label">RELATIONSHIP TYPE</span><h2>{detail.type}</h2><p>{detail.description}</p><div className="modal-people">{[detail.sourceId, detail.targetId].map((id, index) => { const person = changemakers.find((p) => p.id === id); if (!person) return null; return <div key={id}>{index > 0 && <span className="modal-link">↔</span>}<span>{person.name}<small>{person.city}, {person.country}</small></span></div>; })}</div><Button variant="secondary" className="modal-action" onClick={() => selectPerson(detail.targetId)}>Explore {changemakers.find((person) => person.id === detail.targetId)?.name ?? "changemaker"} <ArrowRight size={16} /></Button></div></div>}
     {showHelp && <div className="modal-backdrop help-backdrop" onMouseDown={() => setShowHelp(false)}><section className="shortcuts-panel" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" onMouseDown={(event) => event.stopPropagation()}><div className="modal-top"><span className="eyebrow">QUICK KEYS</span><Button variant="ghost" size="icon" className="icon-button" onClick={() => setShowHelp(false)} aria-label="Close keyboard shortcuts"><X size={18} /></Button></div><h2>Move through the map</h2><div><span>Search</span><kbd>/</kbd><span>Close panel</span><kbd>Esc</kbd><span>Reset view</span><kbd>R</kbd><span>Globe / List</span><kbd>G / L</kbd><span>Open filters</span><kbd>F</kbd></div></section></div>}
   </div>;

@@ -28,6 +28,16 @@ import type {
   Topology,
 } from "topojson-specification";
 
+/**
+ * The underlying three-stdlib OrbitControls instance that drei's component
+ * exposes through its ref. Derived from the component's own ref type rather
+ * than importing three-stdlib directly, so this file does not need
+ * three-stdlib as a direct dependency just for a type.
+ */
+type OrbitControlsImpl = React.ComponentRef<
+  typeof OrbitControls
+>;
+
 import atlas from "@/data/world-atlas.json";
 import {
   categoryColor,
@@ -38,8 +48,10 @@ import type { Connection } from "@/data/connections";
 const RADIUS = 2.55;
 const DEG = Math.PI / 180;
 
-const TEXTURE_WIDTH = 2048;
-const TEXTURE_HEIGHT = 1024;
+// Shared with MapExplorer's flat-map projection, which mirrors this
+// equirectangular setup against the same texture dimensions.
+export const TEXTURE_WIDTH = 2048;
+export const TEXTURE_HEIGHT = 1024;
 
 type GlobePalette = {
   ocean: string;
@@ -59,20 +71,22 @@ const topology =
     countries: GeometryCollection;
   }>;
 
-const countryFeatures =
-  feature(
-    topology,
-    topology.objects.countries,
-  ) as FeatureCollection<
-    Geometry,
-    { name: string }
-  >;
+export const countryFeatures: FeatureCollection<
+  Geometry,
+  { name: string }
+> = feature(
+  topology,
+  topology.objects.countries,
+) as FeatureCollection<
+  Geometry,
+  { name: string }
+>;
 
 /* -------------------------------------------------------------------------- */
 /* Projection                                                                */
 /* -------------------------------------------------------------------------- */
 
-const projection = geoEquirectangular()
+export const projection = geoEquirectangular()
   .rotate([-90, 0])
   .scale(TEXTURE_WIDTH / (2 * Math.PI))
   .translate([
@@ -755,6 +769,7 @@ export const EarthLayer = React.memo(
       <group>
         {/* Base globe: deliberately unlit for constant brightness */}
         <mesh
+          name="globe-surface"
           onPointerMove={
             handlePointerMove
           }
@@ -1229,7 +1244,7 @@ export const MarkerLayer =
 /* Connections                                                                */
 /* -------------------------------------------------------------------------- */
 
-function getConnectionColor(
+export function getConnectionColor(
   type: string,
 ): string {
   switch (type) {
@@ -1583,6 +1598,164 @@ function ConnectionTube({
 /* Camera                                                                     */
 /* -------------------------------------------------------------------------- */
 
+/** How long the viewer must leave the globe alone before it resumes spinning. */
+const IDLE_SPIN_DELAY_MS = 3000;
+
+/**
+ * Keeps the globe turning whenever nobody is driving it.
+ *
+ * `OrbitControls` only rotates while the user is actively dragging, so the
+ * globe goes completely static the moment they let go. This watches the
+ * controls' DOM node: any pointer or wheel activity stops the drift and
+ * restarts a `IDLE_SPIN_DELAY_MS` countdown, and when that countdown elapses
+ * with no input, `autoRotate` is switched back on so the camera drifts again.
+ *
+ * Implementation notes:
+ *  - `autoRotate` is mutated through the controls ref rather than React state,
+ *    so toggling it never triggers a scene re-render.
+ *  - The listeners are attached in a layout effect keyed on the resolved
+ *    element, because the ref is empty on the first render pass and the
+ *    controls object is only created once the Canvas mounts.
+ *  - `prefers-reduced-motion` disables the drift entirely.
+ */
+export const IdleAutoRotate = React.memo(
+  function IdleAutoRotate({
+    controlsRef,
+    reducedMotion,
+  }: {
+    controlsRef: React.RefObject<OrbitControlsImpl | null>;
+    reducedMotion: boolean;
+  }) {
+    const { camera, scene } = useThree();
+    const [element, setElement] =
+      useState<HTMLElement | null>(null);
+
+    const idleTimer = useRef<number | null>(null);
+    const activePointers = useRef(new Set<number>());
+
+    const clearIdleTimer = useCallback(() => {
+      if (idleTimer.current !== null) {
+        window.clearTimeout(idleTimer.current);
+        idleTimer.current = null;
+      }
+    }, []);
+
+    // `enabled` is read through a ref so the listener effect never needs to be
+    // torn down and re-attached when the motion preference changes.
+    const enabledRef = useRef(!reducedMotion);
+
+    useEffect(() => {
+      enabledRef.current = !reducedMotion;
+    }, [reducedMotion]);
+
+    // Subscribe once the controls' canvas element exists.
+    useEffect(() => {
+      const controls = controlsRef.current;
+      if (!controls) return;
+
+      setElement(controls.domElement ?? null);
+    }, [controlsRef]);
+
+    useEffect(() => {
+      if (!element) return;
+
+      const isOverGlobe = (event: PointerEvent | WheelEvent) => {
+        const globe = scene.getObjectByName("globe-surface");
+        const bounds = element.getBoundingClientRect();
+        if (!globe || bounds.width === 0 || bounds.height === 0) {
+          return false;
+        }
+
+        const pointer = new THREE.Vector2(
+          ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
+          -((event.clientY - bounds.top) / bounds.height) * 2 + 1,
+        );
+        const raycaster = new THREE.Raycaster();
+        raycaster.setFromCamera(pointer, camera);
+
+        return raycaster.intersectObject(globe, false).length > 0;
+      };
+
+      const handleActivity = () => {
+        // Stop drifting immediately, then (re)start the idle countdown so the
+        // globe only resumes once the viewer has genuinely stopped interacting.
+        const controls = controlsRef.current;
+        if (controls) controls.autoRotate = false;
+
+        clearIdleTimer();
+
+  if (!enabledRef.current || activePointers.current.size > 0) return;
+
+        idleTimer.current = window.setTimeout(() => {
+          idleTimer.current = null;
+          const idleControls = controlsRef.current;
+          if (idleControls) idleControls.autoRotate = true;
+        }, IDLE_SPIN_DELAY_MS);
+      };
+
+      const handlePointerDown = (event: PointerEvent) => {
+        if (!isOverGlobe(event)) return;
+        activePointers.current.add(event.pointerId);
+        handleActivity();
+      };
+
+      const handlePointerMove = (event: PointerEvent) => {
+        if (
+          activePointers.current.has(event.pointerId) ||
+          isOverGlobe(event)
+        ) {
+          handleActivity();
+        }
+      };
+
+      const handlePointerEnd = (event: PointerEvent) => {
+        if (!activePointers.current.delete(event.pointerId)) return;
+        handleActivity();
+      };
+
+      const handleWheel = (event: WheelEvent) => {
+        if (isOverGlobe(event)) handleActivity();
+      };
+
+      element.addEventListener("pointerdown", handlePointerDown);
+      element.addEventListener("pointermove", handlePointerMove);
+      element.addEventListener("wheel", handleWheel, { passive: true });
+      window.addEventListener("pointerup", handlePointerEnd);
+      window.addEventListener("pointercancel", handlePointerEnd);
+
+      const controls = controlsRef.current;
+      if (controls && enabledRef.current) {
+        controls.autoRotate = true;
+      }
+
+      return () => {
+        element.removeEventListener("pointerdown", handlePointerDown);
+        element.removeEventListener("pointermove", handlePointerMove);
+        element.removeEventListener("wheel", handleWheel);
+        window.removeEventListener("pointerup", handlePointerEnd);
+        window.removeEventListener("pointercancel", handlePointerEnd);
+        clearIdleTimer();
+        activePointers.current.clear();
+
+        const controls = controlsRef.current;
+        if (controls) controls.autoRotate = false;
+      };
+    }, [element, controlsRef, clearIdleTimer]);
+
+    // Honour a live change to the motion preference: stop drifting now, and
+    // when it is switched back off, let the listeners resume arming the timer.
+    useEffect(() => {
+      if (!reducedMotion) return;
+
+      clearIdleTimer();
+      const controls = controlsRef.current;
+      if (controls) controls.autoRotate = false;
+    }, [reducedMotion, controlsRef, clearIdleTimer]);
+
+    return null;
+  },
+);
+
 export const CameraController =
   React.memo(function CameraController({
     person,
@@ -1737,6 +1910,13 @@ export function GlobeExplorer({
     useMemo(
       readGlobePalette,
       [],
+    );
+
+  // Ref to the live OrbitControls instance so the idle-spin logic can toggle
+  // `autoRotate` imperatively, without re-rendering the scene.
+  const controlsRef =
+    useRef<OrbitControlsImpl | null>(
+      null,
     );
 
   const [
@@ -2046,6 +2226,7 @@ export function GlobeExplorer({
         />
 
         <OrbitControls
+          ref={controlsRef}
           enableDamping
           dampingFactor={0.08}
           minDistance={4.3}
@@ -2053,6 +2234,12 @@ export function GlobeExplorer({
           enablePan={false}
           rotateSpeed={0.6}
           zoomSpeed={0.7}
+        />
+
+        {/* Resume the slow drift once the viewer has been idle a moment. */}
+        <IdleAutoRotate
+          controlsRef={controlsRef}
+          reducedMotion={reducedMotion}
         />
 
         <CameraController

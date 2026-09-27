@@ -10,33 +10,96 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AdminRouteImport } from './routes/admin'
+import { Route as AdminIndexRouteImport } from './routes/admin/index'
+import { Route as AdminVerificationRouteImport } from './routes/admin/verification'
+import { Route as AdminChangemakersIndexRouteImport } from './routes/admin/changemakers/index'
+import { Route as AdminChangemakersIdRouteImport } from './routes/admin/changemakers/$id'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminRoute = AdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminIndexRoute = AdminIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminVerificationRoute = AdminVerificationRouteImport.update({
+  id: '/verification',
+  path: '/verification',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminChangemakersIndexRoute = AdminChangemakersIndexRouteImport.update({
+  id: '/changemakers/',
+  path: '/changemakers/',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminChangemakersIdRoute = AdminChangemakersIdRouteImport.update({
+  id: '/changemakers/$id',
+  path: '/changemakers/$id',
+  getParentRoute: () => AdminRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/admin': typeof AdminRouteWithChildren
+  '/admin/verification': typeof AdminVerificationRoute
+  '/admin/': typeof AdminIndexRoute
+  '/admin/changemakers/$id': typeof AdminChangemakersIdRoute
+  '/admin/changemakers/': typeof AdminChangemakersIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/admin/verification': typeof AdminVerificationRoute
+  '/admin': typeof AdminIndexRoute
+  '/admin/changemakers/$id': typeof AdminChangemakersIdRoute
+  '/admin/changemakers': typeof AdminChangemakersIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/admin': typeof AdminRouteWithChildren
+  '/admin/verification': typeof AdminVerificationRoute
+  '/admin/': typeof AdminIndexRoute
+  '/admin/changemakers/$id': typeof AdminChangemakersIdRoute
+  '/admin/changemakers/': typeof AdminChangemakersIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths:
+    | '/'
+    | '/admin'
+    | '/admin/verification'
+    | '/admin/'
+    | '/admin/changemakers/$id'
+    | '/admin/changemakers/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to:
+    | '/'
+    | '/admin/verification'
+    | '/admin'
+    | '/admin/changemakers/$id'
+    | '/admin/changemakers'
+  id:
+    | '__root__'
+    | '/'
+    | '/admin'
+    | '/admin/verification'
+    | '/admin/'
+    | '/admin/changemakers/$id'
+    | '/admin/changemakers/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AdminRoute: typeof AdminRouteWithChildren
 }
 
 declare module '@tanstack/react-router' {
@@ -48,11 +111,63 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin': {
+      id: '/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/': {
+      id: '/admin/'
+      path: '/'
+      fullPath: '/admin/'
+      preLoaderRoute: typeof AdminIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/verification': {
+      id: '/admin/verification'
+      path: '/verification'
+      fullPath: '/admin/verification'
+      preLoaderRoute: typeof AdminVerificationRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/changemakers/': {
+      id: '/admin/changemakers/'
+      path: '/changemakers'
+      fullPath: '/admin/changemakers/'
+      preLoaderRoute: typeof AdminChangemakersIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/changemakers/$id': {
+      id: '/admin/changemakers/$id'
+      path: '/changemakers/$id'
+      fullPath: '/admin/changemakers/$id'
+      preLoaderRoute: typeof AdminChangemakersIdRouteImport
+      parentRoute: typeof AdminRoute
+    }
   }
 }
 
+interface AdminRouteChildren {
+  AdminVerificationRoute: typeof AdminVerificationRoute
+  AdminIndexRoute: typeof AdminIndexRoute
+  AdminChangemakersIdRoute: typeof AdminChangemakersIdRoute
+  AdminChangemakersIndexRoute: typeof AdminChangemakersIndexRoute
+}
+
+const AdminRouteChildren: AdminRouteChildren = {
+  AdminVerificationRoute: AdminVerificationRoute,
+  AdminIndexRoute: AdminIndexRoute,
+  AdminChangemakersIdRoute: AdminChangemakersIdRoute,
+  AdminChangemakersIndexRoute: AdminChangemakersIndexRoute,
+}
+
+const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AdminRoute: AdminRouteWithChildren,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
